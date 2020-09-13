@@ -1,0 +1,4 @@
+baseURL = "https://kam3nev.github.io/"
+languageCode = "en-us"
+title = "Tobias talks HPC"
+theme = "hugotex"
