@@ -344,7 +344,7 @@ clean :
 
 We use GDB to debug this program. Let's start to see at which address the struct resides, and where consequently we have the `int`s `x` and `y`.
 
-````bash
+```bash
 (gdb) layout src
 (gdb) b main
 (gdb) p &(a.x)
