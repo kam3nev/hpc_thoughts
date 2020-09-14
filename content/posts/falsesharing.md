@@ -327,10 +327,31 @@ int main(){
 and here's the makefile
 
 ```make
+.PHONY : all
 
+TARGETS = example1
+lIBS = -lm -lpthread
+CFLAGS = -g -march=native -O0
+
+all : $(TARGETS)
+
+example1 : example1.c
+	gcc $(CFLAGS) -o $@ $^ $(lIBS)
+
+clean :
+	rm -f $(TARGETS)
 ```
 
 We use GDB to debug this program. Let's start to see at which address the struct resides, and where consequently we have the `int`s `x` and `y`.
+
+````bash
+(gdb) layout src
+(gdb) b main
+(gdb) p &(a.x)
+(gdb) p &(a.y)
+```
+
+Ok, so we that `a.x` is at `0x404048` (when I was running it last time) and that `a.y` is at `0x40404c`, i. e. 4 bytes away from `a.x` -- as expected.
 [^5]: If [Laplace was a Unix-beard](../laplace.png), he might've said "Lisez Drepper, lisez Drepper, c'est notre maître à tous." instead.
 [^4]: As you'll see later, this is a heavily simplified picture, and is only really true for fully associative caches.
 [^1]: As Drepper mentions, there are some places in memory that cannot be cached, but that's something for the OS-people.
