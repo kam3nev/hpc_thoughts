@@ -74,11 +74,13 @@ Whenever the CPU needs some data in memory, it's going to search through the cac
 
 Since it's likely that we'll use neighboring memory together<cite>[^2]</cite>, and since main memory (to be more specific -- DRAM) is faster when reading a lot of data in a row (because of capacitors and such), we don't read just single bytes into cache. Rather, we read contiguous chunks of **64 bytes** of main memory (in cache lingo, *blocks*) into cache.<cite>[^3]</cite> Cache is indexed in terms of these chunks, which henceforth are referred to by their proper name **cache lines**.
 
-The following picture might help you to remember:
+> **REMARK:** It is common to refer to both the entries in the cache, and the corresponding chunks of 64 bytes in main memory as cache lines, and identify them with each other.
+
+The following picture might help you remember:
 
 {{< image src="../mem_vs_cache.png" >}}
 
-Keep in mind however that the above picture is just a heuristic. In reality, what you see when you code are virtual memory addresses, which are mapped to physical addresses by the OS kernel and the CPU. All you need to understand as a (Linux) programmer is the concept of a process.
+Keep in mind however that the above picture is just a heuristic. In reality, what your programs see are virtual memory addresses, which are mapped to physical addresses by the OS kernel and the CPU. All you need to understand as a (Linux) programmer is the concept of a process.
 
 Now we get into a rather hairy area of caching -- how to associate memory addresses to cache lines in a way that makes it fast to find data in cache, and to place data in cache.
 
@@ -196,9 +198,140 @@ in the same cache set (with index `0d23`).
 
 The above is only a very brief overview of cache layout, and there is far more to be learned if you want to really go far down the rabbit hole. However, for the purpose of understanding cache-related slowdown issues, it should be more than enough.
 
-## Cache coherency -- the MESI protocol
+## Cache coherency
 
-Now we're finally ready to talk about cache-related slowdowns in a multi-core setting. In this setting, all cores should, in the words of Drepper, "see the same memory content at all times".
+Now we're finally ready to talk about cache-related slowdowns in a multi-core setting. All cores should, in the words of Drepper, "see the same memory content at all times". This is called **cache coherency**.
+
+It is however inefficient for the cores to share the caches completely, and therefore they achieve coherency by communicating with each other using a well-established protocol. There are several different cache coherency protocols (MESI, MOESI, MESIF, to name a few), but we will focus on the MESI protocol because it gives us the necessary general picture.
+
+In what follows, I will consider coherency between different *cores* but the ideas presented work also for threads. (For threads, a cache line on the same core needs keep track of separate cache line states for the different threads -- I will not go into details on how that works, because I frankly haven't learned that yet.)
+
+### The MESI protocol
+
+> **REMARK:** This section follows Drepper closely. Advanced (or wanting to be advanced) students might wish to just read Drepper.<cite>[^5]</cite>
+
+In the MESI protocol, a cache line can be in four different states (remember that we are in a multi-core setting):
+
+1. Modified -- the cache line has been modified.
+2. Exclusive -- the cache line is not modified, but is known to not be loaded into another core's cache.
+3. Shared -- the cache line is not modified, but could exist in another core's cache.
+4. Invalid -- the cache line is unused.
+
+Let's go through how a cache line changes through all these states using the following neato finite state machine.
+
+{{< image src="../mesi_smol.png" >}}
+
+Let's do a walkthrough:
+
+#### Starting at invalid
+
+In this case, we need to read from main memory, this is slow, but obviously is still a necessary first step.
+
+* At the start, all caches are empty and thus marked as **invalid**.
+* If data is loaded into a cache line for writing, it is set to **modified**.
+* If data is loaded into a cache line for reading, there are two cases.
+  1. If the data is present in a cache line belonging to some other core, the cache line is set to **shared**.
+  2. If not, then the cache line is set to **exclusive**.
+
+#### Starting at modified
+
+* If a **modified** cache line is read from or written to by the local core, we can use the content and state remains **modified**.
+* If a second core wants to read from a cache line marked as **modified** in the first core, then the first core must send the cache line to the second core and mark the cache line as **shared**. The cache line also needs to go over the bus into the associated addresses in main memory (to ensure coherency).
+* If a second core wants to write to a cache line marked as **modified** in the first core, then the first core sends over the cache line (as above, including sending the cache line to main memory) and marks it locally as invalid.
+
+The communication needed in the latter two cases can lead to slowdowns.
+
+#### Starting at shared
+
+* If a **shared** cache line is read from by the local core, it remains **shared** and the data is retrieved.
+* If a **shared** cache line is written to by the local core, it is changed to **modified**. Other copies of the cache line in other cores are all marked as **invalid**. (This requires communication -- potential slowdown.)
+* If a **shared** cache line is read from by a remote core, the cache line remains **shared** and nothing is done locally.
+* If a **shared** cache line is to be written to by a remote core, the cache line is marked as **invalid**.
+
+In the latter two cases, no communication is needed.
+
+#### Starting at exclusive
+
+This is almost the same as when you start on shared, but with one difference:
+
+* If an **exclusive** cache line is written to by the local core, it is changed to **modified**, but this is not communicated to the other cores.
+
+Obviously, having a cache line in the **exclusive** state is great, because no slowdown caused by communication can occur.
+
+### False sharing
+
+Now we know (more than) enough to understand what "false sharing" is, and to avoid it by using our knowledge about how cache is implemented. Let's start with an example. We haven't coded in a while, so let's bring out some good old `pthreads`.
+
+[Switch over to "screen-share", with non-important pieces sped up.]
+
+```C
+#include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+typedef struct{
+        int x;
+        int y;
+} packedint;
+
+packedint a = {1, 0};
+int sum_val=0;
+
+#define REPS 500
+
+void *summer(void *arg){
+        int s = 0;
+        for(size_t reps=0; reps < REPS; ++reps){
+                s=0;
+                for(size_t ix = 0; ix < 1000000; ++ix)
+                        s += a.x;
+        }
+        printf("summer done.\n");
+        sum_val = s;
+        return NULL;
+}
+
+void *incrementer(void *arg){
+        for(size_t reps=0; reps < REPS; ++reps){
+                for(int ix = 0; ix < 1000000; ++ix)
+                        ++a.y;
+        }
+        printf("incrementer done.\n");
+        return NULL;
+}
+
+int main(){
+        int ret;
+        pthread_t threads[2];
+        //creation
+        if(ret = pthread_create(threads, NULL, summer, NULL)){
+                printf("Error creating thread: %d\n", ret);
+                exit(1);
+        }
+        if(ret = pthread_create(threads+1, NULL, incrementer, NULL)){
+                printf("Error creating thread: %d\n", ret);
+                exit(1);
+        }
+        //joining       
+        for(size_t t = 0; t < 2; ++t){
+                if(ret = pthread_join(threads[t], NULL)){
+                        printf("Error joining thread: %d\n", ret);
+                        exit(1);
+                }
+        }
+        printf("x=%d, y=%d, sum_val=%d\n", a.x, a.y, sum_val);
+        return 0;
+}
+```
+
+and here's the makefile
+
+```make
+
+```
+
+We use GDB to debug this program. Let's start to see at which address the struct resides, and where consequently we have the `int`s `x` and `y`.
+[^5]: If [Laplace was a Unix-beard](../laplace.png), he might've said "Lisez Drepper, lisez Drepper, c'est notre maître à tous." instead.
 [^4]: As you'll see later, this is a heavily simplified picture, and is only really true for fully associative caches.
 [^1]: As Drepper mentions, there are some places in memory that cannot be cached, but that's something for the OS-people.
 [^2]: This is a bit of a "chicken or the egg" kind of situation. As programmers we learn that cache bets on spatial locality, and therefore we try to use contiguous blocks of memory, by choice. But CPU developers assume that our code uses memory contiguously and therefore design the CPUs to take advantage of this. Regardless, contiguous \\(\Leftrightarrow\\) good.
