@@ -3,6 +3,8 @@ title: "The Cache Lectures"
 date: 2020-09-12T12:21:45+02:00
 draft: false
 ---
+[Video 1 -- Overview.](../video1.webm)
+
 # The basics of cache, cache coherency, and "false sharing"
 
 Based on
@@ -12,7 +14,7 @@ Based on
 
 {{< hr >}}
 
-In this video, we're going to talk about a cache-related slowdown phenomenon that can occur for parallell code called "false sharing". False sharing may cause significant slowdowns while at a first glance being hard to detect. But if you remember how cache works, and use ```perf``` like a boss, "false sharing" ain't got nothin' on you.
+In these videos, we're going to talk about a cache-related slowdown phenomenon that can occur for parallell code called "false sharing". False sharing may cause significant slowdowns while at a first glance being hard to detect. But if you remember how cache works, and use ```perf``` like a boss, "false sharing" ain't got nothin' on you.
 
 ## Why cache?
 
@@ -236,10 +238,10 @@ In this case, we need to read from main memory, this is slow, but obviously is s
 #### Starting at modified
 
 * If a **modified** cache line is read from or written to by the local core, we can use the content and state remains **modified**.
-* If a second core wants to read from a cache line marked as **modified** in the first core, then the first core must send the cache line to the second core and mark the cache line as **shared**. The cache line also needs to go over the bus into the associated addresses in main memory (to ensure coherency).
-* If a second core wants to write to a cache line marked as **modified** in the first core, then the first core sends over the cache line (as above, including sending the cache line to main memory) and marks it locally as invalid.
+* If a second core wants to read from a cache line marked as **modified** in the first core (in cache lingo, *hit on a modified cache line*, HITM), then the first core must send the cache line to the second core and mark the cache line as **shared**. The cache line also needs to go over the bus into the associated addresses in main memory (to ensure coherency).
+* If a second core wants to write to a cache line marked as **modified** in the first core (HITM), then the first core sends over the cache line (as above, including sending the cache line to main memory) and marks it locally as invalid.
 
-The communication needed in the latter two cases can lead to slowdowns.
+The communication needed in the latter two cases can lead to considerable slowdowns, and is precisely what is meant by "false sharing".
 
 #### Starting at shared
 
@@ -347,12 +349,123 @@ We use GDB to debug this program. Let's start to see at which address the struct
 ```bash
 (gdb) layout src
 (gdb) b main
+(gdb) r
 (gdb) p &(a.x)
 (gdb) p &(a.y)
 ```
 
-Ok, so we that `a.x` is at `0x404048` (when I was running it last time) and that `a.y` is at `0x40404c`, i. e. 4 bytes away from `a.x` -- as expected.
+Ok, so we see that `a.x` is at `0x404048` (when I was running it last time) and that `a.y` is at `0x40404c`, i. e. 4 bytes away from `a.x` -- as expected.<cite>[^6]</cite> Using `x` we can also examine the memory manually:
 
+```bash
+(gdb) x/8tb &a
+```
+
+Let's convert the addresses to binary to see what the tag, set, and offset bits are.
+
+* `0x404048 = 0b0...010000000100000001 001000`
+* `0x40404c = 0b0...010000000100000001 001100`
+
+Since all bits except the offset bits are identical, `a.x` and `a.y` are in the same cache line. Before going in to the theory about what happens when we execute our code, let's use a feature from `perf` called ["cache-2-cache"](https://joemario.github.io/blog/2016/09/01/c2c-blog/), or "c2c" for short.
+
+> **REMARK**: Running `perf` in this mode seems to require more than user rights, so I'm running it locally on my Intel Core i7-4700HQ.
+
+Now we run in the command line
+
+```bash
+$ sudo perf c2c record ./example1
+$ sudo perf c2c report --stdio > perf_report.txt
+$ nvim perf_report.txt
+```
+
+The lines are long, so you might want to run `set nowrap` in the Vim console. The output you'll get is something like:
+
+```
+=================================================
+            Trace Event Information              
+=================================================
+  Total records                     :     484479
+  Locked Load/Store Operations      :          0
+  Load Operations                   :     239401
+  Loads - uncacheable               :          0
+  Loads - IO                        :          0
+  Loads - Miss                      :          0
+  Loads - no mapping                :          0
+  Load Fill Buffer Hit              :      61937
+  Load L1D hit                      :     177457
+  Load L2D hit                      :          3
+  Load LLC hit                      :          2
+  Load Local HITM                   :          2
+  Load Remote HITM                  :          0
+  Load Remote HIT                   :          0
+  Load Local DRAM                   :          2
+  Load Remote DRAM                  :          0
+  Load MESI State Exclusive         :          2
+  Load MESI State Shared            :          0
+  Load LLC Misses                   :          2
+  LLC Misses to Local DRAM          :      100.0%
+  LLC Misses to Remote DRAM         :        0.0%
+  LLC Misses to Remote cache (HIT)  :        0.0%
+  LLC Misses to Remote cache (HITM) :        0.0%
+  Store Operations                  :     245078
+  Store - uncacheable               :          0
+  Store - no mapping                :          0
+  Store L1D Hit                     :     235578
+  Store L1D Miss                    :       9500
+  No Page Map Rejects               :          0
+  Unable to parse data source       :          0
+
+=================================================
+    Global Shared Cache Line Event Information   
+=================================================
+  Total Shared Cache Lines          :          1
+  Load HITs on shared lines         :      87137
+  Fill Buffer Hits on shared lines  :      61934
+  L1D hits on shared lines          :      25198
+  L2D hits on shared lines          :          3
+  LLC hits on shared lines          :          2
+  Locked Access on shared lines     :          0
+  Store HITs on shared lines        :     104713
+  Store L1D hits on shared lines    :      95214
+  Total Merged records              :     104715
+
+=================================================
+                 c2c details                     
+=================================================
+  Events                            : cpu/mem-loads,ldlat=30/P
+                                    : cpu/mem-stores/P
+  Cachelines sort on                : Total HITMs
+  Cacheline data grouping           : offset,iaddr
+
+=================================================
+           Shared Data Cache Line Table          
+=================================================
+#
+#        ----------- Cacheline ----------    Total      Tot  ----- LLC Load Hitm -----  ---- Store Reference ----  --- Load Dram ----      LLC    Total  ----- Core Load Hit -----  -- LLC Load Hit --
+# Index             Address  Node  PA cnt  records     Hitm    Total      Lcl      Rmt    Total    L1Hit   L1Miss       Lcl       Rmt  Ld Miss    Loads       FB       L1       L2       Llc       Rmt
+# .....  ..................  ....  ......  .......  .......  .......  .......  .......  .......  .......  .......  ........  ........  .......  .......  .......  .......  .......  ........  ........
+#
+      0            0x404040     0   98718   191850  100.00%        2        2        0   104713    95214     9499         0         0        0    87137    61934    25198        3         0         0
+
+=================================================
+      Shared Cache Line Distribution Pareto      
+=================================================
+#
+#        ----- HITM -----  -- Store Refs --  --------- Data address ---------                      ---------- cycles ----------    Total       cpu                     Shared                     
+#   Num      Rmt      Lcl   L1 Hit  L1 Miss              Offset  Node  PA cnt        Code address  rmt hitm  lcl hitm      load  records       cnt          Symbol    Object    Source:Line  Node
+# .....  .......  .......  .......  .......  ..................  ....  ......  ..................  ........  ........  ........  .......  ........  ...............  ........  .............  ....
+#
+  -------------------------------------------------------------
+      0        0        2    95214     9499            0x404040
+  -------------------------------------------------------------
+           0.00%  100.00%    0.00%    0.00%                0x10     0       1            0x4011b4         0        98        52    52422         1  [.] summer       example1  example1.c:20   0
+           0.00%    0.00%  100.00%  100.00%                0x14     0       1            0x401227         0         0         0   104713         1  [.] incrementer  example1  example1.c:31   0 
+```
+
+In this report we see a bunch of mentions of `HITM`. This stands for "hit in a modified cache line", and means exactly that we're in the situation that I described before were we want to read or write to a cache line which is marked as modified in some other core/thread. We know that this leads to slowdowns, because the cache line has to be sent to memory and in addition be marked as invalid locally, which also will lead to cache misses later in the execution. This phenomenon is exactly what we call "false sharing".
+
+Let's try to explain this using the MESI protocol and our knowledge of cache layout.
+
+[^6]: Had we used a struct with total size that isn't a multiple of a power of two, say 5 bytes (an `int` and a `char`), the compiler would pack the struct with extra space so that it becomes a multiple of a power of two. The reason for this is that the (our) CPU only reads in 8 byte chunks.
 [^5]: If [Laplace was a Unix-beard](../laplace.png), he might've said "Lisez Drepper, lisez Drepper, c'est notre maître à tous." instead.
 [^4]: As you'll see later, this is a heavily simplified picture, and is only really true for fully associative caches.
 [^1]: As Drepper mentions, there are some places in memory that cannot be cached, but that's something for the OS-people.
