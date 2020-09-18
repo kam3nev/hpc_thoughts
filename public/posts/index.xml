@@ -18,7 +18,7 @@
       
       <guid>https://kam3nev.github.io/posts/falsesharing/</guid>
       <description>The basics of cache, cache coherency, and &amp;ldquo;false sharing&amp;rdquo; Based on
- &amp;ldquo;What Every Programmer Should Know About Memory&amp;rdquo;, by U. Drepper, the cache memory lectures by Harry Porter (from Portland State University), and Scott Myers&amp;rsquo; 2014 talk &amp;ldquo;Cpu Caches and Why You Care&amp;rdquo;.   In this video, we&amp;rsquo;re going to talk about a cache-related slowdown phenomenon that can occur for parallell code called &amp;ldquo;false sharing&amp;rdquo;. False sharing may cause significant slowdowns while at a first glance being hard to detect.</description>
+ &amp;ldquo;What Every Programmer Should Know About Memory&amp;rdquo;, by U. Drepper, the cache memory lectures by Harry Porter (from Portland State University), and Scott Myers&amp;rsquo; 2014 talk &amp;ldquo;Cpu Caches and Why You Care&amp;rdquo;.   In these videos, we&amp;rsquo;re going to talk about a cache-related slowdown phenomenon that can occur for parallell code called &amp;ldquo;false sharing&amp;rdquo;. False sharing may cause significant slowdowns while at a first glance being hard to detect.</description>
     </item>
     
   </channel>

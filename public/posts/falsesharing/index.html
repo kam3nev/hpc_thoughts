@@ -57,7 +57,7 @@
 </ul>
 <hr>
 
-<p>In this video, we&rsquo;re going to talk about a cache-related slowdown phenomenon that can occur for parallell code called &ldquo;false sharing&rdquo;. False sharing may cause significant slowdowns while at a first glance being hard to detect. But if you remember how cache works, and use <code>perf</code> like a boss, &ldquo;false sharing&rdquo; ain&rsquo;t got nothin&rsquo; on you.</p>
+<p>In these videos, we&rsquo;re going to talk about a cache-related slowdown phenomenon that can occur for parallell code called &ldquo;false sharing&rdquo;. False sharing may cause significant slowdowns while at a first glance being hard to detect. But if you remember how cache works, and use <code>perf</code> like a boss, &ldquo;false sharing&rdquo; ain&rsquo;t got nothin&rsquo; on you.</p>
 <h2 id="why-cache">Why cache?</h2>
 <p>Roughly speaking, there are two kinds of RAM. Static RAM (SRAM) and dynamic RAM (DRAM). DRAM is cheap, needs to continually refreshed, and is slower than SRAM, which is fast but expensive. Modern computers therefore have a RAM tradeoff &ndash; they use a small amount of SRAM close to the CPU, and a larger amount of DRAM connected to the CPU via a bus.</p>
 <p>The most common way of using the precious SRAM is to store recently used data or instructions &ndash; to <strong>cache</strong> them. This turns out to be pretty effective, since programs often access the same area of memory repeatedly (spatial locality), and a lot of instructions are used repeatedly in rapid succession (temporal locality).</p>
@@ -292,10 +292,10 @@ L3 cache:                        77 MiB
 <h4 id="starting-at-modified">Starting at modified</h4>
 <ul>
 <li>If a <strong>modified</strong> cache line is read from or written to by the local core, we can use the content and state remains <strong>modified</strong>.</li>
-<li>If a second core wants to read from a cache line marked as <strong>modified</strong> in the first core, then the first core must send the cache line to the second core and mark the cache line as <strong>shared</strong>. The cache line also needs to go over the bus into the associated addresses in main memory (to ensure coherency).</li>
-<li>If a second core wants to write to a cache line marked as <strong>modified</strong> in the first core, then the first core sends over the cache line (as above, including sending the cache line to main memory) and marks it locally as invalid.</li>
+<li>If a second core wants to read from a cache line marked as <strong>modified</strong> in the first core (in cache lingo, <em>hit on a modified cache line</em>, HITM), then the first core must send the cache line to the second core and mark the cache line as <strong>shared</strong>. The cache line also needs to go over the bus into the associated addresses in main memory (to ensure coherency).</li>
+<li>If a second core wants to write to a cache line marked as <strong>modified</strong> in the first core (HITM), then the first core sends over the cache line (as above, including sending the cache line to main memory) and marks it locally as invalid.</li>
 </ul>
-<p>The communication needed in the latter two cases can lead to slowdowns.</p>
+<p>The communication needed in the latter two cases can lead to considerable slowdowns, and is precisely what is meant by &ldquo;false sharing&rdquo;.</p>
 <h4 id="starting-at-shared">Starting at shared</h4>
 <ul>
 <li>If a <strong>shared</strong> cache line is read from by the local core, it remains <strong>shared</strong> and the data is retrieved.</li>
@@ -387,9 +387,106 @@ CFLAGS <span style="color:#f92672">=</span> -g -march<span style="color:#f92672"
 </code></pre></div><p>We use GDB to debug this program. Let&rsquo;s start to see at which address the struct resides, and where consequently we have the <code>int</code>s <code>x</code> and <code>y</code>.</p>
 <div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash"><span style="color:#f92672">(</span>gdb<span style="color:#f92672">)</span> layout src
 <span style="color:#f92672">(</span>gdb<span style="color:#f92672">)</span> b main
+<span style="color:#f92672">(</span>gdb<span style="color:#f92672">)</span> r
 <span style="color:#f92672">(</span>gdb<span style="color:#f92672">)</span> p &amp;<span style="color:#f92672">(</span>a.x<span style="color:#f92672">)</span>
 <span style="color:#f92672">(</span>gdb<span style="color:#f92672">)</span> p &amp;<span style="color:#f92672">(</span>a.y<span style="color:#f92672">)</span>
-</code></pre></div><p>Ok, so we that <code>a.x</code> is at <code>0x404048</code> (when I was running it last time) and that <code>a.y</code> is at <code>0x40404c</code>, i. e. 4 bytes away from <code>a.x</code> &ndash; as expected.</p>
+</code></pre></div><p>Ok, so we see that <code>a.x</code> is at <code>0x404048</code> (when I was running it last time) and that <code>a.y</code> is at <code>0x40404c</code>, i. e. 4 bytes away from <code>a.x</code> &ndash; as expected.<!-- raw HTML omitted --><sup id="fnref:6"><a href="#fn:6" class="footnote-ref" role="doc-noteref">6</a></sup><!-- raw HTML omitted --> Using <code>x</code> we can also examine the memory manually:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash"><span style="color:#f92672">(</span>gdb<span style="color:#f92672">)</span> x/8tb &amp;a
+</code></pre></div><p>Let&rsquo;s convert the addresses to binary to see what the tag, set, and offset bits are.</p>
+<ul>
+<li><code>0x404048 = 0b0...010000000100000001 001000</code></li>
+<li><code>0x40404c = 0b0...010000000100000001 001100</code></li>
+</ul>
+<p>Since all bits except the offset bits are identical, <code>a.x</code> and <code>a.y</code> are in the same cache line. Before going in to the theory about what happens when we execute our code, let&rsquo;s use a feature from <code>perf</code> called <a href="https://joemario.github.io/blog/2016/09/01/c2c-blog/">&ldquo;cache-2-cache&rdquo;</a>, or &ldquo;c2c&rdquo; for short.</p>
+<blockquote>
+<p><strong>REMARK</strong>: Running <code>perf</code> in this mode seems to require more than user rights, so I&rsquo;m running it locally on my Intel Core i7-4700HQ.</p>
+</blockquote>
+<p>Now we run in the command line</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">$ sudo perf c2c record ./example1
+$ sudo perf c2c report --stdio &gt; perf_report.txt
+$ nvim perf_report.txt
+</code></pre></div><p>The lines are long, so you might want to run <code>set nowrap</code> in the Vim console. The output you&rsquo;ll get is something like:</p>
+<pre><code>=================================================
+            Trace Event Information              
+=================================================
+  Total records                     :     484479
+  Locked Load/Store Operations      :          0
+  Load Operations                   :     239401
+  Loads - uncacheable               :          0
+  Loads - IO                        :          0
+  Loads - Miss                      :          0
+  Loads - no mapping                :          0
+  Load Fill Buffer Hit              :      61937
+  Load L1D hit                      :     177457
+  Load L2D hit                      :          3
+  Load LLC hit                      :          2
+  Load Local HITM                   :          2
+  Load Remote HITM                  :          0
+  Load Remote HIT                   :          0
+  Load Local DRAM                   :          2
+  Load Remote DRAM                  :          0
+  Load MESI State Exclusive         :          2
+  Load MESI State Shared            :          0
+  Load LLC Misses                   :          2
+  LLC Misses to Local DRAM          :      100.0%
+  LLC Misses to Remote DRAM         :        0.0%
+  LLC Misses to Remote cache (HIT)  :        0.0%
+  LLC Misses to Remote cache (HITM) :        0.0%
+  Store Operations                  :     245078
+  Store - uncacheable               :          0
+  Store - no mapping                :          0
+  Store L1D Hit                     :     235578
+  Store L1D Miss                    :       9500
+  No Page Map Rejects               :          0
+  Unable to parse data source       :          0
+
+=================================================
+    Global Shared Cache Line Event Information   
+=================================================
+  Total Shared Cache Lines          :          1
+  Load HITs on shared lines         :      87137
+  Fill Buffer Hits on shared lines  :      61934
+  L1D hits on shared lines          :      25198
+  L2D hits on shared lines          :          3
+  LLC hits on shared lines          :          2
+  Locked Access on shared lines     :          0
+  Store HITs on shared lines        :     104713
+  Store L1D hits on shared lines    :      95214
+  Total Merged records              :     104715
+
+=================================================
+                 c2c details                     
+=================================================
+  Events                            : cpu/mem-loads,ldlat=30/P
+                                    : cpu/mem-stores/P
+  Cachelines sort on                : Total HITMs
+  Cacheline data grouping           : offset,iaddr
+
+=================================================
+           Shared Data Cache Line Table          
+=================================================
+#
+#        ----------- Cacheline ----------    Total      Tot  ----- LLC Load Hitm -----  ---- Store Reference ----  --- Load Dram ----      LLC    Total  ----- Core Load Hit -----  -- LLC Load Hit --
+# Index             Address  Node  PA cnt  records     Hitm    Total      Lcl      Rmt    Total    L1Hit   L1Miss       Lcl       Rmt  Ld Miss    Loads       FB       L1       L2       Llc       Rmt
+# .....  ..................  ....  ......  .......  .......  .......  .......  .......  .......  .......  .......  ........  ........  .......  .......  .......  .......  .......  ........  ........
+#
+      0            0x404040     0   98718   191850  100.00%        2        2        0   104713    95214     9499         0         0        0    87137    61934    25198        3         0         0
+
+=================================================
+      Shared Cache Line Distribution Pareto      
+=================================================
+#
+#        ----- HITM -----  -- Store Refs --  --------- Data address ---------                      ---------- cycles ----------    Total       cpu                     Shared                     
+#   Num      Rmt      Lcl   L1 Hit  L1 Miss              Offset  Node  PA cnt        Code address  rmt hitm  lcl hitm      load  records       cnt          Symbol    Object    Source:Line  Node
+# .....  .......  .......  .......  .......  ..................  ....  ......  ..................  ........  ........  ........  .......  ........  ...............  ........  .............  ....
+#
+  -------------------------------------------------------------
+      0        0        2    95214     9499            0x404040
+  -------------------------------------------------------------
+           0.00%  100.00%    0.00%    0.00%                0x10     0       1            0x4011b4         0        98        52    52422         1  [.] summer       example1  example1.c:20   0
+           0.00%    0.00%  100.00%  100.00%                0x14     0       1            0x401227         0         0         0   104713         1  [.] incrementer  example1  example1.c:31   0 
+</code></pre><p>In this report we see a bunch of mentions of <code>HITM</code>. This stands for &ldquo;hit in a modified cache line&rdquo;, and means exactly that we&rsquo;re in the situation that I described before were we want to read or write to a cache line which is marked as modified in some other core/thread. We know that this leads to slowdowns, because the cache line has to be sent to memory and in addition be marked as invalid locally, which also will lead to cache misses later in the execution. This phenomenon is exactly what we call &ldquo;false sharing&rdquo;.</p>
+<p>Let&rsquo;s try to explain this using the MESI protocol and our knowledge of cache layout.</p>
 <section class="footnotes" role="doc-endnotes">
 <hr>
 <ol>
@@ -407,6 +504,9 @@ CFLAGS <span style="color:#f92672">=</span> -g -march<span style="color:#f92672"
 </li>
 <li id="fn:5" role="doc-endnote">
 <p>If <a href="../laplace.png">Laplace was a Unix-beard</a>, he might&rsquo;ve said &ldquo;Lisez Drepper, lisez Drepper, c&rsquo;est notre maître à tous.&rdquo; instead. <a href="#fnref:5" class="footnote-backref" role="doc-backlink">&#x21a9;&#xfe0e;</a></p>
+</li>
+<li id="fn:6" role="doc-endnote">
+<p>Had we used a struct with total size that isn&rsquo;t a multiple of a power of two, say 5 bytes (an <code>int</code> and a <code>char</code>), the compiler would pack the struct with extra space so that it becomes a multiple of a power of two. The reason for this is that the (our) CPU only reads in 8 byte chunks. <a href="#fnref:6" class="footnote-backref" role="doc-backlink">&#x21a9;&#xfe0e;</a></p>
 </li>
 </ol>
 </section>
