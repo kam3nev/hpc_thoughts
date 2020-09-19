@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html lang="en-us"><meta charset="utf-8" />
+
+  <title>The Cache Lectures - Tobias talks HPC</title>
+
+
+<meta http-equiv="X-UA-Compatible" content="IE=edge" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<link rel="stylesheet" href="https://kam3nev.github.io/css/latex.css" />
+<link rel="stylesheet" href="https://kam3nev.github.io/css/main.css" />
+<script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+<meta name="generator" content="Hugo 0.72.0" /><body>
+
+
+
+
+
+
+<header>
+  <nav class="navbar">
+  <div class="nav">
+    
+
+    <ul class="nav-links">
+      
+    </ul>
+  </div>
+</nav>
+  <div class="intro-header">
+    <div class="container">
+      <div class="posts-heading">
+        
+          <h1>The Cache Lectures</h1>
+          
+        
+      </div>
+    </div>
+  </div>
+</header>
+<div id="content">
+  <div class="container" role="main">
+    <article class="article" class="blog-post">
+      <div class="postmeta">
+        <span class="meta-post">
+  <i class="fa fa-calendar-alt"></i>Sep 12, 2020
+  
+</span>
+      </div>
+      <br>
+      
+    <p><a href="https://media.githubusercontent.com/media/kam3nev/kam3nev.github.io/master/posts/video1.webm">Video 1 &ndash; Overview.</a></p>
+<p><a href="../video2_low.webm">Video 2 &ndash; Cache layout.</a></p>
+<h1 id="the-basics-of-cache-cache-coherency-and-false-sharing">The basics of cache, cache coherency, and &ldquo;false sharing&rdquo;</h1>
+<p>Based on</p>
+<ul>
+<li><a href="https://people.freebsd.org/~lstewart/articles/cpumemory.pdf">&ldquo;What Every Programmer Should Know About Memory&rdquo;</a>, by U. Drepper,</li>
+<li>the <a href="http://web.cecs.pdx.edu/~harry/videos-cache/">cache memory lectures</a> by Harry Porter (from Portland State University),</li>
+<li>and Scott Myers&rsquo; 2014 talk <a href="https://www.youtube.com/watch?v=WDIkqP4JbkE">&ldquo;Cpu Caches and Why You Care&rdquo;</a>.</li>
+</ul>
+<hr>
+
+<p>In these videos, we&rsquo;re going to talk about a cache-related slowdown phenomenon that can occur for parallell code called &ldquo;false sharing&rdquo;. False sharing may cause significant slowdowns while at a first glance being hard to detect. But if you remember how cache works, and use <code>perf</code> like a boss, &ldquo;false sharing&rdquo; ain&rsquo;t got nothin&rsquo; on you.</p>
+<h2 id="why-cache">Why cache?</h2>
+<p>Roughly speaking, there are two kinds of RAM. Static RAM (SRAM) and dynamic RAM (DRAM). DRAM is cheap, needs to continually refreshed, and is slower than SRAM, which is fast but expensive. Modern computers therefore have a RAM tradeoff &ndash; they use a small amount of SRAM close to the CPU, and a larger amount of DRAM connected to the CPU via a bus.</p>
+<p>The most common way of using the precious SRAM is to store recently used data or instructions &ndash; to <strong>cache</strong> them. This turns out to be pretty effective, since programs often access the same area of memory repeatedly (spatial locality), and a lot of instructions are used repeatedly in rapid succession (temporal locality).</p>
+<h2 id="cache-hierarchy">Cache hierarchy</h2>
+<p>Let us recall what Martin told us about hardware architecture in week 2. We recall that CPU caches are divided into <strong>levels</strong>.</p>
+<p>The layout could be something like the following (if you want to know for sure, you should <strong>always</strong> take a look at your CPU datasheet):</p>
+<ol>
+<li>L1 cache &ndash; directly connected to an individual core. Often split into L1i (instruction cache) and L1d (data cache).</li>
+<li>L2 cache &ndash; shared between cores.</li>
+<li>L3 cache &ndash; shared between all cores.</li>
+</ol>
+<p>In rare cases, there is also an L4 cache (such as for some processors in the Broadwell and Haswell architectures). Should you be in a spot where you have to code in such a way that you want to effectively utilize an L4 cache, you&rsquo;re well beyond the scope of this course, and then I&rsquo;ll leave to your own devices. I&rsquo;ll also not talk so much about L1i, because frankly, I&rsquo;m still learning about it.</p>
+<p>For the visual learners among you, it might be beneficial to think of the above cache hierarchy in terms of the following picture:</p>
+
+
+
+<div class="center">
+  <img
+    src="../cache_layout.png"
+    alt=""
+    decoding="async"
+  />
+</div>
+
+<p>In this picture, we have two separate processors on the same bus. This is of course not typical for a desktop computer, but is the case for Gantenbein, which we recall from the output of <code>lscpu</code> is dual socket.</p>
+<pre><code>Architecture:                    x86_64
+CPU op-mode(s):                  32-bit, 64-bit
+Byte Order:                      Little Endian
+Address sizes:                   46 bits physical, 48 bits virtual
+CPU(s):                          112
+On-line CPU(s) list:             0-111
+Thread(s) per core:              2
+Core(s) per socket:              28
+Socket(s):                       2
+NUMA node(s):                    2
+Vendor ID:                       GenuineIntel
+CPU family:                      6
+Model:                           85
+Model name:                      Intel(R) Xeon(R) Platinum 8180 CPU @ 2.50GHz
+Stepping:                        4
+CPU MHz:                         1000.079
+BogoMIPS:                        5000.00
+Virtualization:                  VT-x
+L1d cache:                       1.8 MiB
+L1i cache:                       1.8 MiB
+L2 cache:                        56 MiB
+L3 cache:                        77 MiB
+[...]
+</code></pre><p>However, on Gantenbein&rsquo;s two Intel Xeon Platinum 8180, and on <a href="https://stackoverflow.com/questions/944966/how-are-cache-memories-shared-in-multicore-intel-cpus">many modern Intel CPUs</a>, only L3 is shared between all cores and the L1 and L2 caches are private (not shared).</p>
+<h2 id="cache-lines">Cache lines</h2>
+<p>We programmers are never in direct control of cache. Whenever the CPU reads or writes data, it&rsquo;s going to store the data (and a neighborhood of it) in cache.<!-- raw HTML omitted --><sup id="fnref:1"><a href="#fn:1" class="footnote-ref" role="doc-noteref">1</a></sup><!-- raw HTML omitted --> All we can do is to place the data in a cache-friendly way.</p>
+<p>Whenever the CPU needs some data in memory, it&rsquo;s going to search through the cache by level for that data first (going from L1d, to L2, to L3). The way this is accomplished is that the address of the data is associated with a <strong>tag</strong> that the cache memory uses to locate the data in the cache. So, if the CPU wants to access data at address \(X\), it&rsquo;ll first search through the cache for the tag associated to \(X\). Since the cache is small, this will be faster than reading from main memory, given of course that we find the data in the cache (in cache lingo &ndash; if we get a <em>cache hit</em>). If we don&rsquo;t find a match (in cache lingo &ndash; a <em>cache miss</em>), then we use the tag to place the data (and a neighborhood of it), in the cache.<!-- raw HTML omitted --><sup id="fnref:2"><a href="#fn:2" class="footnote-ref" role="doc-noteref">2</a></sup><!-- raw HTML omitted --></p>
+<p>Since it&rsquo;s likely that we&rsquo;ll use neighboring memory together<!-- raw HTML omitted --><sup id="fnref:3"><a href="#fn:3" class="footnote-ref" role="doc-noteref">3</a></sup><!-- raw HTML omitted -->, and since main memory (to be more specific &ndash; DRAM) is faster when reading a lot of data in a row (because of capacitors and such), we don&rsquo;t read just single bytes into cache. Rather, we read contiguous chunks of <strong>64 bytes</strong> of main memory (in cache lingo, <em>blocks</em>) into cache.<!-- raw HTML omitted --><sup id="fnref:4"><a href="#fn:4" class="footnote-ref" role="doc-noteref">4</a></sup><!-- raw HTML omitted --> Cache is indexed in terms of these chunks, which henceforth are referred to by their proper name <strong>cache lines</strong>.</p>
+<blockquote>
+<p><strong>REMARK:</strong> It is common to refer to both the entries in the cache, and the corresponding chunks of 64 bytes in main memory as cache lines, and identify them with each other.</p>
+</blockquote>
+<p>The following picture might help you remember:</p>
+
+
+
+<div class="center">
+  <img
+    src="../mem_vs_cache.png"
+    alt=""
+    decoding="async"
+  />
+</div>
+
+<p>Keep in mind however that the above picture is just a heuristic. In reality, what your programs see are virtual memory addresses, which are mapped to physical addresses by the OS kernel and the CPU. All you need to understand as a (Linux) programmer is the concept of a process.</p>
+<p>Now we get into a rather hairy area of caching &ndash; how to associate memory addresses to cache lines in a way that makes it fast to find data in cache, and to place data in cache.</p>
+<h2 id="addresses-to-cache-lines">Addresses to cache lines</h2>
+<p>In this section we&rsquo;ll talk about fully associative caches, direct mapped caches, and set-associative caches. The former two are special cases of the latter.</p>
+<p>Henceforth, let us consider memory addresses as being divided up to into 3 pieces, as in the following picture:</p>
+
+
+
+<div class="center">
+  <img
+    src="../tag_set_offset.png"
+    alt=""
+    decoding="async"
+  />
+</div>
+
+<p>The number of tag bits and set bits will vary depending on the cache implementation. The number of offset bits will depend on the size of the cache line.</p>
+<p>The tag, set, and offset bits, are used by the cache to look for a match. The tag and set bits are used to find (if it exists) a cache line that contains the (cached copy of the) byte the address is pointing to. The offset bits is used by the cache to select one of the bytes in cache line. So if we have a 64 byte cache line, we need \(\log_2(64)=6\) offset bits.</p>
+<h3 id="fully-associative-caches">Fully associative caches</h3>
+<p>In a fully associative cache, we don&rsquo;t use any set bits, so we only have to concern ourselves with the tag and the offset bits. Fully associative caches work a bit like &ldquo;associative arrays&rdquo; (also known as &ldquo;maps&rdquo; or &ldquo;dictionaries&rdquo;). The keys in the array are the tags, and the values are the cache lines. In addition to this, there is some logic to use the offset bits to select the appropriate byte in the cache line. Unlike the associative arrays you&rsquo;ve encountered when programming, a fully associative array has a very limited amount of keys, and you can&rsquo;t just add new keys at will. Instead, if there&rsquo;s no match and you want to place data in cache, you have to decide to <strong>evict</strong> an already existing line. There are several different algorithms (cache replacement policies) to decide on which cache line to evict, e. g. least recently used, first in first out, last in first out, and so on. The interested reader is advised to consult <a href="https://en.wikipedia.org/wiki/Cache_replacement_policies">this Wikipedia page</a>. If it turns that the cache line that is going to be evicted has been modified (in cache lingo, it&rsquo;s <em>dirty</em>), then it needs to be written back to memory first.</p>
+<blockquote>
+<p><strong>REMARK:</strong> It&rsquo;s important to note however, that in a fully associative cache, there&rsquo;s no hardware restriction on which cache line a main memory block is put into. This will not be the same for direct-mapped caches, as we shall soon see.</p>
+</blockquote>
+<p>Here&rsquo;s a way of thinking of it in Julia:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-julia" data-lang="julia"><span style="color:#66d9ef">function</span> match(cache<span style="color:#f92672">::</span><span style="color:#66d9ef">Dict</span>{<span style="color:#66d9ef">BitVector</span>, <span style="color:#66d9ef">Vector</span>{<span style="color:#66d9ef">Char</span>}}, addr<span style="color:#f92672">::</span><span style="color:#66d9ef">BitVector</span>)
+  tag <span style="color:#f92672">=</span> addr[<span style="color:#ae81ff">7</span><span style="color:#f92672">:</span><span style="color:#ae81ff">64</span>]
+  offset <span style="color:#f92672">=</span> addr[<span style="color:#ae81ff">1</span><span style="color:#f92672">:</span><span style="color:#ae81ff">6</span>]
+  cacheline <span style="color:#f92672">=</span> FAC(tag)
+  <span style="color:#66d9ef">if</span> <span style="color:#f92672">!</span>isnothing(cacheline)
+    <span style="color:#66d9ef">return</span> cacheline[<span style="color:#66d9ef">Int</span>(offset)]
+  <span style="color:#66d9ef">else</span>
+    <span style="color:#75715e">#evict and replace</span>
+  <span style="color:#66d9ef">end</span>
+<span style="color:#66d9ef">end</span>
+</code></pre></div><p>Let me draw a simple picture for you of some idealized matching logic of a fully associative cache with 4 lines and 64 bytes per line &ndash; a 256 byte cache.</p>
+
+
+
+<div class="center">
+  <img
+    src="../fully_assoc.png"
+    alt=""
+    decoding="async"
+  />
+</div>
+
+<p>In this picture <code>Cmp</code> is a component that returns <code>1</code> if all bits match, otherwise it returns <code>0</code>. The components <code>Sel</code> returns the byte indicated by the offset in the data coming from the right input if the left input is <code>1</code>, otherwise it returns the byte <code>0x00</code>.</p>
+<p>Obviously, more logic is required to implement the (re)placement policy, but we&rsquo;ll that for another course. If you can get a hold of some gates, it&rsquo;d be an interesting Shannon-esque exercise.</p>
+<p>Fully associative caches seem great in theory, but if you want to have a lot of cache lines, it&rsquo;ll be pretty hard to implement in hardware. But for some special caches, like the translation lookaside buffer (TLB, used in conjunction with the translation between virtual addresses used by processes, to physical addresses), fully associative caches are used.</p>
+<h3 id="direct-mapped-caches">Direct mapped caches</h3>
+<p>In a direct-mapped cache, you are no longer free to put a main memory block in whichever cache line you want. Instead, this will be determined by the set bits. That&rsquo;s right, for direct-mapped caches, we use all three of the tag, set, and offset fields. In a direct-mapped cache, we don&rsquo;t have compare the tag bits of the address with a whole bunch of cache line tags, and this makes it easier to build than a fully associative cache (just use a multiplexer).</p>
+<p>To see how we use the fields, let&rsquo;s look at an example of a 512 line, 64 byte/line cache. (This time I&rsquo;m not drawing out any circuitry, as I don&rsquo;t think it helps particularly with the understanding.)</p>
+
+
+
+<div class="center">
+  <img
+    src="../direct_mapped.png"
+    alt=""
+    decoding="async"
+  />
+</div>
+
+<p>In the above example, when looking for a byte with address \(A\) in cache, we:</p>
+<ol>
+<li>Send in \(A\) to cache.</li>
+<li>Extract the set bits from \(A\).</li>
+<li>Use the set bits to select the associated cache line.</li>
+<li>Compare the tag bits of \(A\) with the tag on the cache line. If there&rsquo;s match, we&rsquo;ve a cache hit, and if there&rsquo;s no match we&rsquo;ve a cache miss. In the case of a miss, we proceed along the same lines as described in the previous section.</li>
+</ol>
+<p>On a given cache line, say with set bits <code>0d123=0b001111011</code>, the possible tags are</p>
+<blockquote>
+<p><code>0b0000000000000000000000000000000000000000000000000</code></p>
+</blockquote>
+<p>through to</p>
+<blockquote>
+<p><code>0b1111111111111111111111111111111111111111111111111</code></p>
+</blockquote>
+<p>Hence the possible starting addresses of the memory block stored in the cache line are</p>
+<ul>
+<li><code>0b0000000000000000000000000000000000000000000000000 001111011 000000 = 0d7872</code> &ndash; associated with the main memory block with starting address \(7872\) and ending address \(7935\).</li>
+<li><code>0b0000000000000000000000000000000000000000000000001 001111011 000000 = 0d40640</code> &ndash; associated with the main memory block with starting address \(40640=7872+2^{15}\) and ending address \(40703\),</li>
+<li><code>0d73408</code></li>
+<li>and so on.</li>
+</ul>
+<p>There is a drawback with direct mapped caches. In the above example, it is possible (although unlikely) that our program needs to access data at for example the main memory addresses and <code>0d7872</code> and <code>0d40644</code> in close succession. This data belongs to blocks that will be cached on the same line, and therefore we need to repeatedly evict the cache line. This situation has a large hit on performance and is referred to as <a href="https://en.wikipedia.org/wiki/Thrashing_(computer_science)"><em>cache thrashing</em></a>. (See also Harry Porter&rsquo;s 6th video at 9:40.)</p>
+<p>One way of avoiding issues such as cache thrashing is to use a compromise between fully associative, and direct-mapped caches: set-associative caches.</p>
+<h3 id="set-associative-caches">Set-associative caches</h3>
+<p>Set-associative caches work by dividing up the cache lines into sets, where each set of cache lines work like a fully associative cache.</p>
+<p>I&rsquo;ll draw you a picture again, and then I&rsquo;ll explain how it works. The picture depicts a 32 kilobyte 8-way associative cache with 64 bytes per line.</p>
+
+
+
+<div class="center">
+  <img
+    src="../set_assoc.png"
+    alt=""
+    decoding="async"
+  />
+</div>
+
+<p>This cache is called 8-way because every cache set contains 8 cache lines, and we see that</p>
+<p>$$8\cdot 64\cdot 64\text{ B}=32768\text{ B}=32\text{ kB}$$</p>
+<p>so that indeed the total size of the cache is 32 kilobyte, as we claimed.</p>
+<p>Let&rsquo;s now describe how this cache works when looking for a byte with main memory address \(A\).</p>
+<ol>
+<li>Send in \(A\) to the cache.</li>
+<li>Extract the set bits from \(A\).</li>
+<li>Use the set bits to select the associated cache set.</li>
+<li>Compare the tag bits of \(A\) with the tags of the 8 cache lines in the set (like in a fully associative cache). If there&rsquo;s a cache hit, you&rsquo;re golden &ndash; read your desired byte from the cache line using the offset bits. If there&rsquo;s a cache miss, follow the cache placement policy.</li>
+</ol>
+<p>What&rsquo;s neat about a set-associative cache is that the likelihood of thrashing your cache is significantly reduced. There&rsquo;s no longer a single tag in the cache set (like with a direct mapped cache), and instead there are 8 (in our example).</p>
+<p>Hence, we could store the bytes with addresses</p>
+<blockquote>
+<p>\(A=\) <code>0b0000000000000000000000000000000000000000000000000000 010111 000001</code></p>
+</blockquote>
+<p>and</p>
+<blockquote>
+<p>\(B=\) <code>0b0000000000000000000000000000000000000000000000000010 010111 000011</code></p>
+</blockquote>
+<p>in the same cache set (with index <code>0d23</code>).</p>
+<h3 id="concluding-thoughts-on-cache-layout">Concluding thoughts on cache layout</h3>
+<p>The above is only a very brief overview of cache layout, and there is far more to be learned if you want to really go far down the rabbit hole. However, for the purpose of understanding cache-related slowdown issues, it should be more than enough.</p>
+<h2 id="cache-coherency">Cache coherency</h2>
+<p>Now we&rsquo;re finally ready to talk about cache-related slowdowns in a multi-core setting. All cores should, in the words of Drepper, &ldquo;see the same memory content at all times&rdquo;. This is called <strong>cache coherency</strong>.</p>
+<p>It is however inefficient for the cores to share the caches completely, and therefore they achieve coherency by communicating with each other using a well-established protocol. There are several different cache coherency protocols (MESI, MOESI, MESIF, to name a few), but we will focus on the MESI protocol because it gives us the necessary general picture.</p>
+<p>In what follows, I will consider coherency between different <em>cores</em> but the ideas presented work also for threads. (For threads, a cache line on the same core needs keep track of separate cache line states for the different threads &ndash; I will not go into details on how that works, because I frankly haven&rsquo;t learned that yet.)</p>
+<h3 id="the-mesi-protocol">The MESI protocol</h3>
+<blockquote>
+<p><strong>REMARK:</strong> This section follows Drepper closely. Advanced (or wanting to be advanced) students might wish to just read Drepper.<!-- raw HTML omitted --><sup id="fnref:5"><a href="#fn:5" class="footnote-ref" role="doc-noteref">5</a></sup><!-- raw HTML omitted --></p>
+</blockquote>
+<p>In the MESI protocol, a cache line can be in four different states (remember that we are in a multi-core setting):</p>
+<ol>
+<li>Modified &ndash; the cache line has been modified.</li>
+<li>Exclusive &ndash; the cache line is not modified, but is known to not be loaded into another core&rsquo;s cache.</li>
+<li>Shared &ndash; the cache line is not modified, but could exist in another core&rsquo;s cache.</li>
+<li>Invalid &ndash; the cache line is unused.</li>
+</ol>
+<p>Let&rsquo;s go through how a cache line changes through all these states using the following neato finite state machine.</p>
+
+
+
+<div class="center">
+  <img
+    src="../mesi_smol.png"
+    alt=""
+    decoding="async"
+  />
+</div>
+
+<p>Let&rsquo;s do a walkthrough:</p>
+<h4 id="starting-at-invalid">Starting at invalid</h4>
+<p>In this case, we need to read from main memory, this is slow, but obviously is still a necessary first step.</p>
+<ul>
+<li>At the start, all caches are empty and thus marked as <strong>invalid</strong>.</li>
+<li>If data is loaded into a cache line for writing, it is set to <strong>modified</strong>.</li>
+<li>If data is loaded into a cache line for reading, there are two cases.
+<ol>
+<li>If the data is present in a cache line belonging to some other core, the cache line is set to <strong>shared</strong>.</li>
+<li>If not, then the cache line is set to <strong>exclusive</strong>.</li>
+</ol>
+</li>
+</ul>
+<h4 id="starting-at-modified">Starting at modified</h4>
+<ul>
+<li>If a <strong>modified</strong> cache line is read from or written to by the local core, we can use the content and state remains <strong>modified</strong>.</li>
+<li>If a second core wants to read from a cache line marked as <strong>modified</strong> in the first core (in cache lingo, <em>hit on a modified cache line</em>, HITM), then the first core must send the cache line to the second core and mark the cache line as <strong>shared</strong>. The cache line also needs to go over the bus into the associated addresses in main memory (to ensure coherency).</li>
+<li>If a second core wants to write to a cache line marked as <strong>modified</strong> in the first core (HITM), then the first core sends over the cache line (as above, including sending the cache line to main memory) and marks it locally as invalid.</li>
+</ul>
+<p>The communication needed in the latter two cases can lead to considerable slowdowns, and is precisely what is meant by &ldquo;false sharing&rdquo;.</p>
+<h4 id="starting-at-shared">Starting at shared</h4>
+<ul>
+<li>If a <strong>shared</strong> cache line is read from by the local core, it remains <strong>shared</strong> and the data is retrieved.</li>
+<li>If a <strong>shared</strong> cache line is written to by the local core, it is changed to <strong>modified</strong>. Other copies of the cache line in other cores are all marked as <strong>invalid</strong>. (This requires communication &ndash; potential slowdown.)</li>
+<li>If a <strong>shared</strong> cache line is read from by a remote core, the cache line remains <strong>shared</strong> and nothing is done locally.</li>
+<li>If a <strong>shared</strong> cache line is to be written to by a remote core, the cache line is marked as <strong>invalid</strong>.</li>
+</ul>
+<p>In the latter two cases, no communication is needed.</p>
+<h4 id="starting-at-exclusive">Starting at exclusive</h4>
+<p>This is almost the same as when you start on shared, but with one difference:</p>
+<ul>
+<li>If an <strong>exclusive</strong> cache line is written to by the local core, it is changed to <strong>modified</strong>, but this is not communicated to the other cores.</li>
+</ul>
+<p>Obviously, having a cache line in the <strong>exclusive</strong> state is great, because no slowdown caused by communication can occur.</p>
+<h3 id="false-sharing">False sharing</h3>
+<p>Now we know (more than) enough to understand what &ldquo;false sharing&rdquo; is, and to avoid it by using our knowledge about how cache is implemented. Let&rsquo;s start with an example. We haven&rsquo;t coded in a while, so let&rsquo;s bring out some good old <code>pthreads</code>.</p>
+<p>[Switch over to &ldquo;screen-share&rdquo;, with non-important pieces sped up.]</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#75715e">#include</span> <span style="color:#75715e">&lt;pthread.h&gt;</span><span style="color:#75715e">
+</span><span style="color:#75715e">#include</span> <span style="color:#75715e">&lt;stdio.h&gt;</span><span style="color:#75715e">
+</span><span style="color:#75715e">#include</span> <span style="color:#75715e">&lt;stdlib.h&gt;</span><span style="color:#75715e">
+</span><span style="color:#75715e"></span>
+<span style="color:#66d9ef">typedef</span> <span style="color:#66d9ef">struct</span>{
+        <span style="color:#66d9ef">int</span> x;
+        <span style="color:#66d9ef">int</span> y;
+} packedint;
+
+packedint a <span style="color:#f92672">=</span> {<span style="color:#ae81ff">1</span>, <span style="color:#ae81ff">0</span>};
+<span style="color:#66d9ef">int</span> sum_val<span style="color:#f92672">=</span><span style="color:#ae81ff">0</span>;
+
+<span style="color:#75715e">#define REPS 500
+</span><span style="color:#75715e"></span>
+<span style="color:#66d9ef">void</span> <span style="color:#f92672">*</span><span style="color:#a6e22e">summer</span>(<span style="color:#66d9ef">void</span> <span style="color:#f92672">*</span>arg){
+        <span style="color:#66d9ef">int</span> s <span style="color:#f92672">=</span> <span style="color:#ae81ff">0</span>;
+        <span style="color:#66d9ef">for</span>(size_t reps<span style="color:#f92672">=</span><span style="color:#ae81ff">0</span>; reps <span style="color:#f92672">&lt;</span> REPS; <span style="color:#f92672">++</span>reps){
+                s<span style="color:#f92672">=</span><span style="color:#ae81ff">0</span>;
+                <span style="color:#66d9ef">for</span>(size_t ix <span style="color:#f92672">=</span> <span style="color:#ae81ff">0</span>; ix <span style="color:#f92672">&lt;</span> <span style="color:#ae81ff">1000000</span>; <span style="color:#f92672">++</span>ix)
+                        s <span style="color:#f92672">+=</span> a.x;
+        }
+        printf(<span style="color:#e6db74">&#34;summer done.</span><span style="color:#ae81ff">\n</span><span style="color:#e6db74">&#34;</span>);
+        sum_val <span style="color:#f92672">=</span> s;
+        <span style="color:#66d9ef">return</span> NULL;
+}
+
+<span style="color:#66d9ef">void</span> <span style="color:#f92672">*</span><span style="color:#a6e22e">incrementer</span>(<span style="color:#66d9ef">void</span> <span style="color:#f92672">*</span>arg){
+        <span style="color:#66d9ef">for</span>(size_t reps<span style="color:#f92672">=</span><span style="color:#ae81ff">0</span>; reps <span style="color:#f92672">&lt;</span> REPS; <span style="color:#f92672">++</span>reps){
+                <span style="color:#66d9ef">for</span>(<span style="color:#66d9ef">int</span> ix <span style="color:#f92672">=</span> <span style="color:#ae81ff">0</span>; ix <span style="color:#f92672">&lt;</span> <span style="color:#ae81ff">1000000</span>; <span style="color:#f92672">++</span>ix)
+                        <span style="color:#f92672">++</span>a.y;
+        }
+        printf(<span style="color:#e6db74">&#34;incrementer done.</span><span style="color:#ae81ff">\n</span><span style="color:#e6db74">&#34;</span>);
+        <span style="color:#66d9ef">return</span> NULL;
+}
+
+<span style="color:#66d9ef">int</span> <span style="color:#a6e22e">main</span>(){
+        <span style="color:#66d9ef">int</span> ret;
+        pthread_t threads[<span style="color:#ae81ff">2</span>];
+        <span style="color:#75715e">//creation
+</span><span style="color:#75715e"></span>        <span style="color:#66d9ef">if</span>(ret <span style="color:#f92672">=</span> pthread_create(threads, NULL, summer, NULL)){
+                printf(<span style="color:#e6db74">&#34;Error creating thread: %d</span><span style="color:#ae81ff">\n</span><span style="color:#e6db74">&#34;</span>, ret);
+                exit(<span style="color:#ae81ff">1</span>);
+        }
+        <span style="color:#66d9ef">if</span>(ret <span style="color:#f92672">=</span> pthread_create(threads<span style="color:#f92672">+</span><span style="color:#ae81ff">1</span>, NULL, incrementer, NULL)){
+                printf(<span style="color:#e6db74">&#34;Error creating thread: %d</span><span style="color:#ae81ff">\n</span><span style="color:#e6db74">&#34;</span>, ret);
+                exit(<span style="color:#ae81ff">1</span>);
+        }
+        <span style="color:#75715e">//joining       
+</span><span style="color:#75715e"></span>        <span style="color:#66d9ef">for</span>(size_t t <span style="color:#f92672">=</span> <span style="color:#ae81ff">0</span>; t <span style="color:#f92672">&lt;</span> <span style="color:#ae81ff">2</span>; <span style="color:#f92672">++</span>t){
+                <span style="color:#66d9ef">if</span>(ret <span style="color:#f92672">=</span> pthread_join(threads[t], NULL)){
+                        printf(<span style="color:#e6db74">&#34;Error joining thread: %d</span><span style="color:#ae81ff">\n</span><span style="color:#e6db74">&#34;</span>, ret);
+                        exit(<span style="color:#ae81ff">1</span>);
+                }
+        }
+        printf(<span style="color:#e6db74">&#34;x=%d, y=%d, sum_val=%d</span><span style="color:#ae81ff">\n</span><span style="color:#e6db74">&#34;</span>, a.x, a.y, sum_val);
+        <span style="color:#66d9ef">return</span> <span style="color:#ae81ff">0</span>;
+}
+</code></pre></div><p>and here&rsquo;s the makefile</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-make" data-lang="make"><span style="color:#a6e22e">.PHONY </span><span style="color:#f92672">:</span> all
+
+TARGETS <span style="color:#f92672">=</span> example1
+lIBS <span style="color:#f92672">=</span> -lm -lpthread
+CFLAGS <span style="color:#f92672">=</span> -g -march<span style="color:#f92672">=</span>native -O0
+
+<span style="color:#a6e22e">all </span><span style="color:#f92672">:</span> <span style="color:#66d9ef">$(</span>TARGETS<span style="color:#66d9ef">)</span>
+
+<span style="color:#a6e22e">example1 </span><span style="color:#f92672">:</span> example1.c
+	gcc <span style="color:#66d9ef">$(</span>CFLAGS<span style="color:#66d9ef">)</span> -o $@ $^ <span style="color:#66d9ef">$(</span>lIBS<span style="color:#66d9ef">)</span>
+
+<span style="color:#a6e22e">clean </span><span style="color:#f92672">:</span>
+	rm -f <span style="color:#66d9ef">$(</span>TARGETS<span style="color:#66d9ef">)</span>
+</code></pre></div><p>We use GDB to debug this program. Let&rsquo;s start to see at which address the struct resides, and where consequently we have the <code>int</code>s <code>x</code> and <code>y</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash"><span style="color:#f92672">(</span>gdb<span style="color:#f92672">)</span> layout src
+<span style="color:#f92672">(</span>gdb<span style="color:#f92672">)</span> b main
+<span style="color:#f92672">(</span>gdb<span style="color:#f92672">)</span> r
+<span style="color:#f92672">(</span>gdb<span style="color:#f92672">)</span> p &amp;<span style="color:#f92672">(</span>a.x<span style="color:#f92672">)</span>
+<span style="color:#f92672">(</span>gdb<span style="color:#f92672">)</span> p &amp;<span style="color:#f92672">(</span>a.y<span style="color:#f92672">)</span>
+</code></pre></div><p>Ok, so we see that <code>a.x</code> is at <code>0x404048</code> (when I was running it last time) and that <code>a.y</code> is at <code>0x40404c</code>, i. e. 4 bytes away from <code>a.x</code> &ndash; as expected.<!-- raw HTML omitted --><sup id="fnref:6"><a href="#fn:6" class="footnote-ref" role="doc-noteref">6</a></sup><!-- raw HTML omitted --> Using <code>x</code> we can also examine the memory manually:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash"><span style="color:#f92672">(</span>gdb<span style="color:#f92672">)</span> x/8tb &amp;a
+</code></pre></div><p>Let&rsquo;s convert the addresses to binary to see what the tag, set, and offset bits are.</p>
+<ul>
+<li><code>0x404048 = 0b0...010000000100000001 001000</code></li>
+<li><code>0x40404c = 0b0...010000000100000001 001100</code></li>
+</ul>
+<p>Since all bits except the offset bits are identical, <code>a.x</code> and <code>a.y</code> are in the same cache line. Before going in to the theory about what happens when we execute our code, let&rsquo;s use a feature from <code>perf</code> called <a href="https://joemario.github.io/blog/2016/09/01/c2c-blog/">&ldquo;cache-2-cache&rdquo;</a>, or &ldquo;c2c&rdquo; for short.</p>
+<blockquote>
+<p><strong>REMARK</strong>: Running <code>perf</code> in this mode seems to require more than user rights, so I&rsquo;m running it locally on my Intel Core i7-4700HQ.</p>
+</blockquote>
+<p>Now we run in the command line</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">$ sudo perf c2c record ./example1
+$ sudo perf c2c report --stdio &gt; perf_report.txt
+$ nvim perf_report.txt
+</code></pre></div><p>The lines are long, so you might want to run <code>set nowrap</code> in the Vim console. The output you&rsquo;ll get is something like:</p>
+<pre><code>=================================================
+            Trace Event Information              
+=================================================
+  Total records                     :     484479
+  Locked Load/Store Operations      :          0
+  Load Operations                   :     239401
+  Loads - uncacheable               :          0
+  Loads - IO                        :          0
+  Loads - Miss                      :          0
+  Loads - no mapping                :          0
+  Load Fill Buffer Hit              :      61937
+  Load L1D hit                      :     177457
+  Load L2D hit                      :          3
+  Load LLC hit                      :          2
+  Load Local HITM                   :          2
+  Load Remote HITM                  :          0
+  Load Remote HIT                   :          0
+  Load Local DRAM                   :          2
+  Load Remote DRAM                  :          0
+  Load MESI State Exclusive         :          2
+  Load MESI State Shared            :          0
+  Load LLC Misses                   :          2
+  LLC Misses to Local DRAM          :      100.0%
+  LLC Misses to Remote DRAM         :        0.0%
+  LLC Misses to Remote cache (HIT)  :        0.0%
+  LLC Misses to Remote cache (HITM) :        0.0%
+  Store Operations                  :     245078
+  Store - uncacheable               :          0
+  Store - no mapping                :          0
+  Store L1D Hit                     :     235578
+  Store L1D Miss                    :       9500
+  No Page Map Rejects               :          0
+  Unable to parse data source       :          0
+
+=================================================
+    Global Shared Cache Line Event Information   
+=================================================
+  Total Shared Cache Lines          :          1
+  Load HITs on shared lines         :      87137
+  Fill Buffer Hits on shared lines  :      61934
+  L1D hits on shared lines          :      25198
+  L2D hits on shared lines          :          3
+  LLC hits on shared lines          :          2
+  Locked Access on shared lines     :          0
+  Store HITs on shared lines        :     104713
+  Store L1D hits on shared lines    :      95214
+  Total Merged records              :     104715
+
+=================================================
+                 c2c details                     
+=================================================
+  Events                            : cpu/mem-loads,ldlat=30/P
+                                    : cpu/mem-stores/P
+  Cachelines sort on                : Total HITMs
+  Cacheline data grouping           : offset,iaddr
+
+=================================================
+           Shared Data Cache Line Table          
+=================================================
+#
+#        ----------- Cacheline ----------    Total      Tot  ----- LLC Load Hitm -----  ---- Store Reference ----  --- Load Dram ----      LLC    Total  ----- Core Load Hit -----  -- LLC Load Hit --
+# Index             Address  Node  PA cnt  records     Hitm    Total      Lcl      Rmt    Total    L1Hit   L1Miss       Lcl       Rmt  Ld Miss    Loads       FB       L1       L2       Llc       Rmt
+# .....  ..................  ....  ......  .......  .......  .......  .......  .......  .......  .......  .......  ........  ........  .......  .......  .......  .......  .......  ........  ........
+#
+      0            0x404040     0   98718   191850  100.00%        2        2        0   104713    95214     9499         0         0        0    87137    61934    25198        3         0         0
+
+=================================================
+      Shared Cache Line Distribution Pareto      
+=================================================
+#
+#        ----- HITM -----  -- Store Refs --  --------- Data address ---------                      ---------- cycles ----------    Total       cpu                     Shared                     
+#   Num      Rmt      Lcl   L1 Hit  L1 Miss              Offset  Node  PA cnt        Code address  rmt hitm  lcl hitm      load  records       cnt          Symbol    Object    Source:Line  Node
+# .....  .......  .......  .......  .......  ..................  ....  ......  ..................  ........  ........  ........  .......  ........  ...............  ........  .............  ....
+#
+  -------------------------------------------------------------
+      0        0        2    95214     9499            0x404040
+  -------------------------------------------------------------
+           0.00%  100.00%    0.00%    0.00%                0x10     0       1            0x4011b4         0        98        52    52422         1  [.] summer       example1  example1.c:20   0
+           0.00%    0.00%  100.00%  100.00%                0x14     0       1            0x401227         0         0         0   104713         1  [.] incrementer  example1  example1.c:31   0 
+</code></pre><p>In this report we see a bunch of mentions of <code>HITM</code>. This stands for &ldquo;hit in a modified cache line&rdquo;, and means exactly that we&rsquo;re in the situation that I described before were we want to read or write to a cache line which is marked as modified in some other core/thread. We know that this leads to slowdowns, because the cache line has to be sent to memory and in addition be marked as invalid locally, which also will lead to cache misses later in the execution. This phenomenon is exactly what we call &ldquo;false sharing&rdquo;.</p>
+<p>Let&rsquo;s try to explain this using the MESI protocol and our knowledge of cache layout. Let&rsquo;s for convenience call the thread that is running <code>summer</code> \(A\), and the thread that is running <code>incrementer</code> \(B\). What happens is the following:</p>
+<ol>
+<li></li>
+</ol>
+<section class="footnotes" role="doc-endnotes">
+<hr>
+<ol>
+<li id="fn:1" role="doc-endnote">
+<p>As Drepper mentions, there are some places in memory that cannot be cached, but that&rsquo;s something for the OS-people. <a href="#fnref:1" class="footnote-backref" role="doc-backlink">&#x21a9;&#xfe0e;</a></p>
+</li>
+<li id="fn:2" role="doc-endnote">
+<p>As you&rsquo;ll see later, this is a heavily simplified picture, and is only really true for fully associative caches. <a href="#fnref:2" class="footnote-backref" role="doc-backlink">&#x21a9;&#xfe0e;</a></p>
+</li>
+<li id="fn:3" role="doc-endnote">
+<p>This is a bit of a &ldquo;chicken or the egg&rdquo; kind of situation. As programmers we learn that cache bets on spatial locality, and therefore we try to use contiguous blocks of memory, by choice. But CPU developers assume that our code uses memory contiguously and therefore design the CPUs to take advantage of this. Regardless, contiguous \(\Leftrightarrow\) good. <a href="#fnref:3" class="footnote-backref" role="doc-backlink">&#x21a9;&#xfe0e;</a></p>
+</li>
+<li id="fn:4" role="doc-endnote">
+<p>On a 64-bit system, we can read 8 bytes (the word size) over the memory bus, and hence, filling up a cache line requires 8 transfers over the bus. <a href="#fnref:4" class="footnote-backref" role="doc-backlink">&#x21a9;&#xfe0e;</a></p>
+</li>
+<li id="fn:5" role="doc-endnote">
+<p>If <a href="../laplace.png">Laplace was a Unix-beard</a>, he might&rsquo;ve said &ldquo;Lisez Drepper, lisez Drepper, c&rsquo;est notre maître à tous.&rdquo; instead. <a href="#fnref:5" class="footnote-backref" role="doc-backlink">&#x21a9;&#xfe0e;</a></p>
+</li>
+<li id="fn:6" role="doc-endnote">
+<p>Had we used a struct with total size that isn&rsquo;t a multiple of a power of two, say 5 bytes (an <code>int</code> and a <code>char</code>), the compiler would pack the struct with extra space so that it becomes a multiple of a power of two. The reason for this is that the (our) CPU only reads in 8 byte chunks. <a href="#fnref:6" class="footnote-backref" role="doc-backlink">&#x21a9;&#xfe0e;</a></p>
+</li>
+</ol>
+</section>
+
+
+
+      
+    </article>
+    
+  </div>
+
+        </div><footer>
+  <div class="container">
+    <p class="credits copyright">
+      <p class="credits theme-by">
+        Powered By <a href="https://gohugo.io">Hugo</a>&nbsp;/&nbsp;Theme&nbsp;<a href="https://github.com/7ma7X/HugoTeX">HugoTeX</a>
+        <br>
+        <a href="https://kam3nev.github.io/about"></a>
+        &copy;
+        2020
+      </p>
+  </div>
+</footer></body>
+</html>
