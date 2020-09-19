@@ -49,6 +49,7 @@
       <br>
       
     <p><a href="https://media.githubusercontent.com/media/kam3nev/kam3nev.github.io/master/posts/video1.webm">Video 1 &ndash; Overview.</a></p>
+<p><a href="../video2_low.webm">Video 2 &ndash; Cache layout.</a></p>
 <h1 id="the-basics-of-cache-cache-coherency-and-false-sharing">The basics of cache, cache coherency, and &ldquo;false sharing&rdquo;</h1>
 <p>Based on</p>
 <ul>
@@ -487,7 +488,10 @@ $ nvim perf_report.txt
            0.00%  100.00%    0.00%    0.00%                0x10     0       1            0x4011b4         0        98        52    52422         1  [.] summer       example1  example1.c:20   0
            0.00%    0.00%  100.00%  100.00%                0x14     0       1            0x401227         0         0         0   104713         1  [.] incrementer  example1  example1.c:31   0 
 </code></pre><p>In this report we see a bunch of mentions of <code>HITM</code>. This stands for &ldquo;hit in a modified cache line&rdquo;, and means exactly that we&rsquo;re in the situation that I described before were we want to read or write to a cache line which is marked as modified in some other core/thread. We know that this leads to slowdowns, because the cache line has to be sent to memory and in addition be marked as invalid locally, which also will lead to cache misses later in the execution. This phenomenon is exactly what we call &ldquo;false sharing&rdquo;.</p>
-<p>Let&rsquo;s try to explain this using the MESI protocol and our knowledge of cache layout.</p>
+<p>Let&rsquo;s try to explain this using the MESI protocol and our knowledge of cache layout. Let&rsquo;s for convenience call the thread that is running <code>summer</code> \(A\), and the thread that is running <code>incrementer</code> \(B\). What happens is the following:</p>
+<ol>
+<li></li>
+</ol>
 <section class="footnotes" role="doc-endnotes">
 <hr>
 <ol>
