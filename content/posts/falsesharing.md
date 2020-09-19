@@ -5,6 +5,8 @@ draft: false
 ---
 [Video 1 -- Overview.](https://media.githubusercontent.com/media/kam3nev/kam3nev.github.io/master/posts/video1.webm)
 
+[Video 2 -- Cache layout.](../video2_low.webm)
+
 # The basics of cache, cache coherency, and "false sharing"
 
 Based on
@@ -463,7 +465,9 @@ The lines are long, so you might want to run `set nowrap` in the Vim console. Th
 
 In this report we see a bunch of mentions of `HITM`. This stands for "hit in a modified cache line", and means exactly that we're in the situation that I described before were we want to read or write to a cache line which is marked as modified in some other core/thread. We know that this leads to slowdowns, because the cache line has to be sent to memory and in addition be marked as invalid locally, which also will lead to cache misses later in the execution. This phenomenon is exactly what we call "false sharing".
 
-Let's try to explain this using the MESI protocol and our knowledge of cache layout.
+Let's try to explain this using the MESI protocol and our knowledge of cache layout. Let's for convenience call the thread that is running `summer` \\(A\\), and the thread that is running `incrementer` \\(B\\). What happens is the following:
+
+1. 
 
 [^6]: Had we used a struct with total size that isn't a multiple of a power of two, say 5 bytes (an `int` and a `char`), the compiler would pack the struct with extra space so that it becomes a multiple of a power of two. The reason for this is that the (our) CPU only reads in 8 byte chunks.
 [^5]: If [Laplace was a Unix-beard](../laplace.png), he might've said "Lisez Drepper, lisez Drepper, c'est notre maître à tous." instead.
