@@ -243,12 +243,12 @@ In this case, we need to read from main memory, this is slow, but obviously is s
 * If a second core wants to read from a cache line marked as **modified** in the first core (in cache lingo, *hit on a modified cache line*, HITM), then the first core must send the cache line to the second core and mark the cache line as **shared**. The cache line also needs to go over the bus into the associated addresses in main memory (to ensure coherency).
 * If a second core wants to write to a cache line marked as **modified** in the first core (HITM), then the first core sends over the cache line (as above, including sending the cache line to main memory) and marks it locally as invalid.
 
-The communication needed in the latter two cases can lead to considerable slowdowns, and is precisely what is meant by "false sharing".
+The communication needed in the latter two cases can lead to considerable slowdowns, and the slowdown that is caused by "false sharing".
 
 #### Starting at shared
 
 * If a **shared** cache line is read from by the local core, it remains **shared** and the data is retrieved.
-* If a **shared** cache line is written to by the local core, it is changed to **modified**. Other copies of the cache line in other cores are all marked as **invalid**. (This requires communication -- potential slowdown.)
+* If a **shared** cache line is written to by the local core, it is changed to **modified**. Other copies of the cache line in other cores are all marked as **invalid**.
 * If a **shared** cache line is read from by a remote core, the cache line remains **shared** and nothing is done locally.
 * If a **shared** cache line is to be written to by a remote core, the cache line is marked as **invalid**.
 
@@ -265,8 +265,6 @@ Obviously, having a cache line in the **exclusive** state is great, because no s
 ### False sharing
 
 Now we know (more than) enough to understand what "false sharing" is, and to avoid it by using our knowledge about how cache is implemented. Let's start with an example. We haven't coded in a while, so let's bring out some good old `pthreads`.
-
-[Switch over to "screen-share", with non-important pieces sped up.]
 
 ```C
 #include <pthread.h>
@@ -367,7 +365,7 @@ Let's convert the addresses to binary to see what the tag, set, and offset bits 
 * `0x404048 = 0b0...010000000100000001 001000`
 * `0x40404c = 0b0...010000000100000001 001100`
 
-Since all bits except the offset bits are identical, `a.x` and `a.y` are in the same cache line. Before going in to the theory about what happens when we execute our code, let's use a feature from `perf` called ["cache-2-cache"](https://joemario.github.io/blog/2016/09/01/c2c-blog/), or "c2c" for short.
+Since all bits except the offset bits are identical, `a.x` and `a.y` are in the same cache line -- the one beginning on `0x404040`. Before going in to the theory about what happens when we execute our code, let's use a feature from `perf` called ["cache-2-cache"](https://joemario.github.io/blog/2016/09/01/c2c-blog/), or "c2c" for short.
 
 > **REMARK**: Running `perf` in this mode seems to require more than user rights, so I'm running it locally on my Intel Core i7-4700HQ.
 
@@ -465,9 +463,50 @@ The lines are long, so you might want to run `set nowrap` in the Vim console. Th
 
 In this report we see a bunch of mentions of `HITM`. This stands for "hit in a modified cache line", and means exactly that we're in the situation that I described before were we want to read or write to a cache line which is marked as modified in some other core/thread. We know that this leads to slowdowns, because the cache line has to be sent to memory and in addition be marked as invalid locally, which also will lead to cache misses later in the execution. This phenomenon is exactly what we call "false sharing".
 
-Let's try to explain this using the MESI protocol and our knowledge of cache layout. Let's for convenience call the thread that is running `summer` \\(A\\), and the thread that is running `incrementer` \\(B\\). What happens is the following:
+Let's explain this using the MESI protocol and our knowledge of cache layout. Let's for convenience call the thread that is running `summer` \\(A\\), and the thread that is running `incrementer` \\(B\\). We assume, without loss of generality, that \\(A\\) accesses `a.x` before \\(B\\) accesses `a.y`. What happens is then:
 
-1. 
+| \\(A\\) (reader) | \\(B\\) (writer) | Event |
+|---|---|---|
+| I | I |   |
+| E | I | \\(A\\) read (read over bus) |
+| I | M | \\(B\\) wrote |
+| S | S | \\(A\\) read (HITM, comm. over bus) |
+| I | M | \\(B\\) wrote (false sharing) |
+| S | S | \\(A\\) read (HITM comm. over bus) |
+
+and so on. We see that when \\(A\\) read after \\(B\\) wrote, there's a HITM, and an associated slowdown, and the cache line `0x404040` in both threads are marked as shared, but immediately afterwards, \\(B\\) writes again, which invalidates the shared state -- the cache line was falsely shared.
+
+### How do we fix it?
+
+At a high level the resolution to our issue is simple -- make sure that the cache line isn't shared. That is, make sure that we don't get a HITM. Since \\(A\\) doesn't rely on a modified version of `a.y` there's no reason that we should load `a.x` from memory (or cache) over and over. We could instead store in a local variable. The same goes for `a.y`. Hence we could instead write the following program:
+
+```C
+void *summer(void *arg){
+        int s = 0;
+        int temp = a.x;
+        for(size_t reps=0; reps < REPS; ++reps){
+                s=0;
+                for(size_t ix = 0; ix < 1000000; ++ix)
+                        s += temp;
+        }
+        printf("summer done.\n");
+        sum_val = s;
+        return NULL;
+}
+
+void *incrementer(void *arg){
+        int temp = a.y;
+        for(size_t reps=0; reps < REPS; ++reps){
+                for(int ix = 0; ix < 1000000; ++ix)
+                        ++temp;
+        }
+        a.y = temp;
+        printf("incrementer done.\n");
+        return NULL;
+}
+```
+
+Since the variables `temp` will be local on the threads, it is very unlikely that they'll be in the same cache line. We verify this quickly by running `perf`.
 
 [^6]: Had we used a struct with total size that isn't a multiple of a power of two, say 5 bytes (an `int` and a `char`), the compiler would pack the struct with extra space so that it becomes a multiple of a power of two. The reason for this is that the (our) CPU only reads in 8 byte chunks.
 [^5]: If [Laplace was a Unix-beard](../laplace.png), he might've said "Lisez Drepper, lisez Drepper, c'est notre maître à tous." instead.
