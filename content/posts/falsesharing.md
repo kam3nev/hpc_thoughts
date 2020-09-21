@@ -5,7 +5,7 @@ draft: false
 ---
 [Video 1 -- Overview.](https://media.githubusercontent.com/media/kam3nev/kam3nev.github.io/master/posts/video1.webm)
 
-[Video 2 -- Cache layout.](../video2_low.webm)
+[Video 2 -- Cache layout.](https://media.githubusercontent.com/media/kam3nev/kam3nev.github.io/master/posts/video2_low.webm)
 
 # The basics of cache, cache coherency, and "false sharing"
 
@@ -267,9 +267,9 @@ Obviously, having a cache line in the **exclusive** state is great, because no s
 Now we know (more than) enough to understand what "false sharing" is, and to avoid it by using our knowledge about how cache is implemented. Let's start with an example. We haven't coded in a while, so let's bring out some good old `pthreads`.
 
 ```C
-#include <pthread.h>
-#include <stdio.h>
-#include <stdlib.h>
+#include<threads.h>
+#include<stdio.h>
+#include<stdlib.h>
 
 typedef struct{
         int x;
@@ -277,11 +277,11 @@ typedef struct{
 } packedint;
 
 packedint a = {1, 0};
-int sum_val=0;
+int sum_val = 0;
 
 #define REPS 500
 
-void *summer(void *arg){
+int summer(void *arg){
         int s = 0;
         for(size_t reps=0; reps < REPS; ++reps){
                 s=0;
@@ -290,33 +290,33 @@ void *summer(void *arg){
         }
         printf("summer done.\n");
         sum_val = s;
-        return NULL;
+        return 0;
 }
 
-void *incrementer(void *arg){
+int incrementer(void *arg){
         for(size_t reps=0; reps < REPS; ++reps){
                 for(int ix = 0; ix < 1000000; ++ix)
                         ++a.y;
         }
         printf("incrementer done.\n");
-        return NULL;
+        return 0;
 }
 
 int main(){
         int ret;
-        pthread_t threads[2];
+        thrd_t threads[2];
         //creation
-        if(ret = pthread_create(threads, NULL, summer, NULL)){
+        if(ret = thrd_create(threads, summer, NULL)){
                 printf("Error creating thread: %d\n", ret);
                 exit(1);
         }
-        if(ret = pthread_create(threads+1, NULL, incrementer, NULL)){
+        if(ret = thrd_create(threads+1, incrementer, NULL)){
                 printf("Error creating thread: %d\n", ret);
                 exit(1);
         }
         //joining       
         for(size_t t = 0; t < 2; ++t){
-                if(ret = pthread_join(threads[t], NULL)){
+                if(ret = thrd_join(threads[t], NULL)){
                         printf("Error joining thread: %d\n", ret);
                         exit(1);
                 }
@@ -324,6 +324,7 @@ int main(){
         printf("x=%d, y=%d, sum_val=%d\n", a.x, a.y, sum_val);
         return 0;
 }
+
 ```
 
 and here's the makefile
@@ -331,17 +332,17 @@ and here's the makefile
 ```make
 .PHONY : all
 
-TARGETS = example1
-lIBS = -lm -lpthread
-CFLAGS = -g -march=native -O0
+TARGETS = falsesharing
+lIBS = -lpthread
+CFLAGS = -g -O0 -std=c11
 
 all : $(TARGETS)
 
-example1 : example1.c
-	gcc $(CFLAGS) -o $@ $^ $(lIBS)
+falsesharing : falsesharing.c
+        gcc $(CFLAGS) -o $@ $^ $(lIBS)
 
 clean :
-	rm -f $(TARGETS)
+        rm -f $(TARGETS)
 ```
 
 We use GDB to debug this program. Let's start to see at which address the struct resides, and where consequently we have the `int`s `x` and `y`.

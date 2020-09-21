@@ -9,7 +9,7 @@
 <link rel="stylesheet" href="https://kam3nev.github.io/css/latex.css" />
 <link rel="stylesheet" href="https://kam3nev.github.io/css/main.css" />
 <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
-<meta name="generator" content="Hugo 0.72.0" /><body>
+<meta name="generator" content="Hugo 0.74.3" /><body>
 
 
 
@@ -49,7 +49,7 @@
       <br>
       
     <p><a href="https://media.githubusercontent.com/media/kam3nev/kam3nev.github.io/master/posts/video1.webm">Video 1 &ndash; Overview.</a></p>
-<p><a href="../video2_low.webm">Video 2 &ndash; Cache layout.</a></p>
+<p><a href="https://media.githubusercontent.com/media/kam3nev/kam3nev.github.io/master/posts/video2_low.webm">Video 2 &ndash; Cache layout.</a></p>
 <h1 id="the-basics-of-cache-cache-coherency-and-false-sharing">The basics of cache, cache coherency, and &ldquo;false sharing&rdquo;</h1>
 <p>Based on</p>
 <ul>
@@ -297,11 +297,11 @@ L3 cache:                        77 MiB
 <li>If a second core wants to read from a cache line marked as <strong>modified</strong> in the first core (in cache lingo, <em>hit on a modified cache line</em>, HITM), then the first core must send the cache line to the second core and mark the cache line as <strong>shared</strong>. The cache line also needs to go over the bus into the associated addresses in main memory (to ensure coherency).</li>
 <li>If a second core wants to write to a cache line marked as <strong>modified</strong> in the first core (HITM), then the first core sends over the cache line (as above, including sending the cache line to main memory) and marks it locally as invalid.</li>
 </ul>
-<p>The communication needed in the latter two cases can lead to considerable slowdowns, and is precisely what is meant by &ldquo;false sharing&rdquo;.</p>
+<p>The communication needed in the latter two cases can lead to considerable slowdowns, and the slowdown that is caused by &ldquo;false sharing&rdquo;.</p>
 <h4 id="starting-at-shared">Starting at shared</h4>
 <ul>
 <li>If a <strong>shared</strong> cache line is read from by the local core, it remains <strong>shared</strong> and the data is retrieved.</li>
-<li>If a <strong>shared</strong> cache line is written to by the local core, it is changed to <strong>modified</strong>. Other copies of the cache line in other cores are all marked as <strong>invalid</strong>. (This requires communication &ndash; potential slowdown.)</li>
+<li>If a <strong>shared</strong> cache line is written to by the local core, it is changed to <strong>modified</strong>. Other copies of the cache line in other cores are all marked as <strong>invalid</strong>.</li>
 <li>If a <strong>shared</strong> cache line is read from by a remote core, the cache line remains <strong>shared</strong> and nothing is done locally.</li>
 <li>If a <strong>shared</strong> cache line is to be written to by a remote core, the cache line is marked as <strong>invalid</strong>.</li>
 </ul>
@@ -314,7 +314,6 @@ L3 cache:                        77 MiB
 <p>Obviously, having a cache line in the <strong>exclusive</strong> state is great, because no slowdown caused by communication can occur.</p>
 <h3 id="false-sharing">False sharing</h3>
 <p>Now we know (more than) enough to understand what &ldquo;false sharing&rdquo; is, and to avoid it by using our knowledge about how cache is implemented. Let&rsquo;s start with an example. We haven&rsquo;t coded in a while, so let&rsquo;s bring out some good old <code>pthreads</code>.</p>
-<p>[Switch over to &ldquo;screen-share&rdquo;, with non-important pieces sped up.]</p>
 <div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#75715e">#include</span> <span style="color:#75715e">&lt;pthread.h&gt;</span><span style="color:#75715e">
 </span><span style="color:#75715e">#include</span> <span style="color:#75715e">&lt;stdio.h&gt;</span><span style="color:#75715e">
 </span><span style="color:#75715e">#include</span> <span style="color:#75715e">&lt;stdlib.h&gt;</span><span style="color:#75715e">
@@ -399,7 +398,7 @@ CFLAGS <span style="color:#f92672">=</span> -g -march<span style="color:#f92672"
 <li><code>0x404048 = 0b0...010000000100000001 001000</code></li>
 <li><code>0x40404c = 0b0...010000000100000001 001100</code></li>
 </ul>
-<p>Since all bits except the offset bits are identical, <code>a.x</code> and <code>a.y</code> are in the same cache line. Before going in to the theory about what happens when we execute our code, let&rsquo;s use a feature from <code>perf</code> called <a href="https://joemario.github.io/blog/2016/09/01/c2c-blog/">&ldquo;cache-2-cache&rdquo;</a>, or &ldquo;c2c&rdquo; for short.</p>
+<p>Since all bits except the offset bits are identical, <code>a.x</code> and <code>a.y</code> are in the same cache line &ndash; the one beginning on <code>0x404040</code>. Before going in to the theory about what happens when we execute our code, let&rsquo;s use a feature from <code>perf</code> called <a href="https://joemario.github.io/blog/2016/09/01/c2c-blog/">&ldquo;cache-2-cache&rdquo;</a>, or &ldquo;c2c&rdquo; for short.</p>
 <blockquote>
 <p><strong>REMARK</strong>: Running <code>perf</code> in this mode seems to require more than user rights, so I&rsquo;m running it locally on my Intel Core i7-4700HQ.</p>
 </blockquote>
@@ -488,10 +487,75 @@ $ nvim perf_report.txt
            0.00%  100.00%    0.00%    0.00%                0x10     0       1            0x4011b4         0        98        52    52422         1  [.] summer       example1  example1.c:20   0
            0.00%    0.00%  100.00%  100.00%                0x14     0       1            0x401227         0         0         0   104713         1  [.] incrementer  example1  example1.c:31   0 
 </code></pre><p>In this report we see a bunch of mentions of <code>HITM</code>. This stands for &ldquo;hit in a modified cache line&rdquo;, and means exactly that we&rsquo;re in the situation that I described before were we want to read or write to a cache line which is marked as modified in some other core/thread. We know that this leads to slowdowns, because the cache line has to be sent to memory and in addition be marked as invalid locally, which also will lead to cache misses later in the execution. This phenomenon is exactly what we call &ldquo;false sharing&rdquo;.</p>
-<p>Let&rsquo;s try to explain this using the MESI protocol and our knowledge of cache layout. Let&rsquo;s for convenience call the thread that is running <code>summer</code> \(A\), and the thread that is running <code>incrementer</code> \(B\). What happens is the following:</p>
-<ol>
-<li></li>
-</ol>
+<p>Let&rsquo;s explain this using the MESI protocol and our knowledge of cache layout. Let&rsquo;s for convenience call the thread that is running <code>summer</code> \(A\), and the thread that is running <code>incrementer</code> \(B\). We assume, without loss of generality, that \(A\) accesses <code>a.x</code> before \(B\) accesses <code>a.y</code>. What happens is then:</p>
+<table>
+<thead>
+<tr>
+<th>\(A\) (reader)</th>
+<th>\(B\) (writer)</th>
+<th>Event</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>I</td>
+<td>I</td>
+<td></td>
+</tr>
+<tr>
+<td>E</td>
+<td>I</td>
+<td>\(A\) read (read over bus)</td>
+</tr>
+<tr>
+<td>I</td>
+<td>M</td>
+<td>\(B\) wrote</td>
+</tr>
+<tr>
+<td>S</td>
+<td>S</td>
+<td>\(A\) read (HITM, comm. over bus)</td>
+</tr>
+<tr>
+<td>I</td>
+<td>M</td>
+<td>\(B\) wrote (false sharing)</td>
+</tr>
+<tr>
+<td>S</td>
+<td>S</td>
+<td>\(A\) read (HITM comm. over bus)</td>
+</tr>
+</tbody>
+</table>
+<p>and so on. We see that when \(A\) read after \(B\) wrote, there&rsquo;s a HITM, and an associated slowdown, and the cache line <code>0x404040</code> in both threads are marked as shared, but immediately afterwards, \(B\) writes again, which invalidates the shared state &ndash; the cache line was falsely shared.</p>
+<h3 id="how-do-we-fix-it">How do we fix it?</h3>
+<p>At a high level the resolution to our issue is simple &ndash; make sure that the cache line isn&rsquo;t shared. That is, make sure that we don&rsquo;t get a HITM. Since \(A\) doesn&rsquo;t rely on a modified version of <code>a.y</code> there&rsquo;s no reason that we should load <code>a.x</code> from memory (or cache) over and over. We could instead store in a local variable. The same goes for <code>a.y</code>. Hence we could instead write the following program:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#66d9ef">void</span> <span style="color:#f92672">*</span><span style="color:#a6e22e">summer</span>(<span style="color:#66d9ef">void</span> <span style="color:#f92672">*</span>arg){
+        <span style="color:#66d9ef">int</span> s <span style="color:#f92672">=</span> <span style="color:#ae81ff">0</span>;
+        <span style="color:#66d9ef">int</span> temp <span style="color:#f92672">=</span> a.x;
+        <span style="color:#66d9ef">for</span>(size_t reps<span style="color:#f92672">=</span><span style="color:#ae81ff">0</span>; reps <span style="color:#f92672">&lt;</span> REPS; <span style="color:#f92672">++</span>reps){
+                s<span style="color:#f92672">=</span><span style="color:#ae81ff">0</span>;
+                <span style="color:#66d9ef">for</span>(size_t ix <span style="color:#f92672">=</span> <span style="color:#ae81ff">0</span>; ix <span style="color:#f92672">&lt;</span> <span style="color:#ae81ff">1000000</span>; <span style="color:#f92672">++</span>ix)
+                        s <span style="color:#f92672">+=</span> temp;
+        }
+        printf(<span style="color:#e6db74">&#34;summer done.</span><span style="color:#ae81ff">\n</span><span style="color:#e6db74">&#34;</span>);
+        sum_val <span style="color:#f92672">=</span> s;
+        <span style="color:#66d9ef">return</span> NULL;
+}
+
+<span style="color:#66d9ef">void</span> <span style="color:#f92672">*</span><span style="color:#a6e22e">incrementer</span>(<span style="color:#66d9ef">void</span> <span style="color:#f92672">*</span>arg){
+        <span style="color:#66d9ef">int</span> temp <span style="color:#f92672">=</span> a.y;
+        <span style="color:#66d9ef">for</span>(size_t reps<span style="color:#f92672">=</span><span style="color:#ae81ff">0</span>; reps <span style="color:#f92672">&lt;</span> REPS; <span style="color:#f92672">++</span>reps){
+                <span style="color:#66d9ef">for</span>(<span style="color:#66d9ef">int</span> ix <span style="color:#f92672">=</span> <span style="color:#ae81ff">0</span>; ix <span style="color:#f92672">&lt;</span> <span style="color:#ae81ff">1000000</span>; <span style="color:#f92672">++</span>ix)
+                        <span style="color:#f92672">++</span>temp;
+        }
+        a.y <span style="color:#f92672">=</span> temp;
+        printf(<span style="color:#e6db74">&#34;incrementer done.</span><span style="color:#ae81ff">\n</span><span style="color:#e6db74">&#34;</span>);
+        <span style="color:#66d9ef">return</span> NULL;
+}
+</code></pre></div><p>Since the variables <code>temp</code> will be local on the threads, it is very unlikely that they&rsquo;ll be in the same cache line. We verify this quickly by running <code>perf</code>.</p>
 <section class="footnotes" role="doc-endnotes">
 <hr>
 <ol>
