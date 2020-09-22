@@ -462,7 +462,7 @@ The lines are long, so you might want to run `set nowrap` in the Vim console. Th
            0.00%    0.00%  100.00%  100.00%                0x14     0       1            0x401227         0         0         0   104713         1  [.] incrementer  example1  example1.c:31   0 
 ```
 
-In this report we see a bunch of mentions of `HITM`. This stands for "hit in a modified cache line", and means exactly that we're in the situation that I described before were we want to read or write to a cache line which is marked as modified in some other core/thread. We know that this leads to slowdowns, because the cache line has to be sent to memory and in addition be marked as invalid locally, which also will lead to cache misses later in the execution. This phenomenon is exactly what we call "false sharing".
+In this report we see a bunch of mentions of `HITM`. We know that this leads to slowdowns, because the cache line has to be sent to memory and in addition be marked as invalid locally, which also will lead to cache misses later in the execution. This phenomenon is exactly what we call "false sharing".
 
 Let's explain this using the MESI protocol and our knowledge of cache layout. Let's for convenience call the thread that is running `summer` \\(A\\), and the thread that is running `incrementer` \\(B\\). We assume, without loss of generality, that \\(A\\) accesses `a.x` before \\(B\\) accesses `a.y`. What happens is then:
 
@@ -507,7 +507,20 @@ void *incrementer(void *arg){
 }
 ```
 
-Since the variables `temp` will be local on the threads, it is very unlikely that they'll be in the same cache line. We verify this quickly by running `perf`.
+Since the variables `temp` will be local on the threads, it is very unlikely that they'll be in the same cache line. This is verified by running `perf` as before.
+
+Another fix is to simple force `a.x` and `a.y` onto different cache lines, by using our knowledge of the fact that we're using 64 byte cache lines. We could then simply pad the struct with extra bytes, like this:
+
+```C
+typedef struct{
+	int x;
+	char pad1[60];
+	int y;
+	char pad2[60];
+} packedint;
+```
+
+This is a much more portable solution, but has the drawback of requiring more memory. Once again, `perf` verifies that this fix also works.
 
 [^6]: Had we used a struct with total size that isn't a multiple of a power of two, say 5 bytes (an `int` and a `char`), the compiler would pack the struct with extra space so that it becomes a multiple of a power of two. The reason for this is that the (our) CPU only reads in 8 byte chunks.
 [^5]: If [Laplace was a Unix-beard](../laplace.png), he might've said "Lisez Drepper, lisez Drepper, c'est notre maître à tous." instead.
