@@ -3,9 +3,11 @@ title: "The Cache Lectures"
 date: 2020-09-12T12:21:45+02:00
 draft: false
 ---
-[Video 1 -- Overview.](https://media.githubusercontent.com/media/kam3nev/kam3nev.github.io/master/posts/video1.webm)
 
-[Video 2 -- Cache layout.](https://media.githubusercontent.com/media/kam3nev/kam3nev.github.io/master/posts/video2_low.webm)
+* [Video 1 -- Overview.](https://media.githubusercontent.com/media/kam3nev/kam3nev.github.io/master/posts/video1.webm)
+* [Video 2 -- Cache layout.](https://media.githubusercontent.com/media/kam3nev/kam3nev.github.io/master/posts/video2_low.webm)
+* [Video 3 -- MESI protocol.](../video3_part1.webm)
+* [Video 4 -- A practical example.](../video3_part2.webm)
 
 # The basics of cache, cache coherency, and "false sharing"
 
