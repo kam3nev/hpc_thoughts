@@ -17,9 +17,7 @@
       <pubDate>Sat, 12 Sep 2020 12:21:45 +0200</pubDate>
       
       <guid>https://kam3nev.github.io/posts/falsesharing/</guid>
-      <description>Video 1 &amp;ndash; Overview.
-Video 2 &amp;ndash; Cache layout.
-The basics of cache, cache coherency, and &amp;ldquo;false sharing&amp;rdquo; Based on
+      <description>Video 1 &amp;ndash; Overview. Video 2 &amp;ndash; Cache layout. Video 3 &amp;ndash; MESI protocol. Video 4 &amp;ndash; A practical example.  The basics of cache, cache coherency, and &amp;ldquo;false sharing&amp;rdquo; Based on
  &amp;ldquo;What Every Programmer Should Know About Memory&amp;rdquo;, by U. Drepper, the cache memory lectures by Harry Porter (from Portland State University), and Scott Myers&amp;rsquo; 2014 talk &amp;ldquo;Cpu Caches and Why You Care&amp;rdquo;.   In these videos, we&amp;rsquo;re going to talk about a cache-related slowdown phenomenon that can occur for parallell code called &amp;ldquo;false sharing&amp;rdquo;.</description>
     </item>
     

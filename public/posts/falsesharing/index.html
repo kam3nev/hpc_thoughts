@@ -9,7 +9,7 @@
 <link rel="stylesheet" href="https://kam3nev.github.io/css/latex.css" />
 <link rel="stylesheet" href="https://kam3nev.github.io/css/main.css" />
 <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
-<meta name="generator" content="Hugo 0.74.3" /><body>
+<meta name="generator" content="Hugo 0.72.0" /><body>
 
 
 
@@ -48,8 +48,12 @@
       </div>
       <br>
       
-    <p><a href="https://media.githubusercontent.com/media/kam3nev/kam3nev.github.io/master/posts/video1.webm">Video 1 &ndash; Overview.</a></p>
-<p><a href="https://media.githubusercontent.com/media/kam3nev/kam3nev.github.io/master/posts/video2_low.webm">Video 2 &ndash; Cache layout.</a></p>
+    <ul>
+<li><a href="https://media.githubusercontent.com/media/kam3nev/kam3nev.github.io/master/posts/video1.webm">Video 1 &ndash; Overview.</a></li>
+<li><a href="https://media.githubusercontent.com/media/kam3nev/kam3nev.github.io/master/posts/video2_low.webm">Video 2 &ndash; Cache layout.</a></li>
+<li><a href="https://media.githubusercontent.com/media/kam3nev/kam3nev.github.io/master/posts/video3_part1.webm">Video 3 &ndash; MESI protocol.</a></li>
+<li><a href="../video3_part2.webm">Video 4 &ndash; A practical example.</a></li>
+</ul>
 <h1 id="the-basics-of-cache-cache-coherency-and-false-sharing">The basics of cache, cache coherency, and &ldquo;false sharing&rdquo;</h1>
 <p>Based on</p>
 <ul>
@@ -487,7 +491,7 @@ $ nvim perf_report.txt
   -------------------------------------------------------------
            0.00%  100.00%    0.00%    0.00%                0x10     0       1            0x4011b4         0        98        52    52422         1  [.] summer       example1  example1.c:20   0
            0.00%    0.00%  100.00%  100.00%                0x14     0       1            0x401227         0         0         0   104713         1  [.] incrementer  example1  example1.c:31   0 
-</code></pre><p>In this report we see a bunch of mentions of <code>HITM</code>. This stands for &ldquo;hit in a modified cache line&rdquo;, and means exactly that we&rsquo;re in the situation that I described before were we want to read or write to a cache line which is marked as modified in some other core/thread. We know that this leads to slowdowns, because the cache line has to be sent to memory and in addition be marked as invalid locally, which also will lead to cache misses later in the execution. This phenomenon is exactly what we call &ldquo;false sharing&rdquo;.</p>
+</code></pre><p>In this report we see a bunch of mentions of <code>HITM</code>. We know that this leads to slowdowns, because the cache line has to be sent to memory and in addition be marked as invalid locally, which also will lead to cache misses later in the execution. This phenomenon is exactly what we call &ldquo;false sharing&rdquo;.</p>
 <p>Let&rsquo;s explain this using the MESI protocol and our knowledge of cache layout. Let&rsquo;s for convenience call the thread that is running <code>summer</code> \(A\), and the thread that is running <code>incrementer</code> \(B\). We assume, without loss of generality, that \(A\) accesses <code>a.x</code> before \(B\) accesses <code>a.y</code>. What happens is then:</p>
 <table>
 <thead>
@@ -556,7 +560,15 @@ $ nvim perf_report.txt
         printf(<span style="color:#e6db74">&#34;incrementer done.</span><span style="color:#ae81ff">\n</span><span style="color:#e6db74">&#34;</span>);
         <span style="color:#66d9ef">return</span> NULL;
 }
-</code></pre></div><p>Since the variables <code>temp</code> will be local on the threads, it is very unlikely that they&rsquo;ll be in the same cache line. We verify this quickly by running <code>perf</code>.</p>
+</code></pre></div><p>Since the variables <code>temp</code> will be local on the threads, it is very unlikely that they&rsquo;ll be in the same cache line. This is verified by running <code>perf</code> as before.</p>
+<p>Another fix is to simple force <code>a.x</code> and <code>a.y</code> onto different cache lines, by using our knowledge of the fact that we&rsquo;re using 64 byte cache lines. We could then simply pad the struct with extra bytes, like this:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-C" data-lang="C"><span style="color:#66d9ef">typedef</span> <span style="color:#66d9ef">struct</span>{
+	<span style="color:#66d9ef">int</span> x;
+	<span style="color:#66d9ef">char</span> pad1[<span style="color:#ae81ff">60</span>];
+	<span style="color:#66d9ef">int</span> y;
+	<span style="color:#66d9ef">char</span> pad2[<span style="color:#ae81ff">60</span>];
+} packedint;
+</code></pre></div><p>This is a much more portable solution, but has the drawback of requiring more memory. Once again, <code>perf</code> verifies that this fix also works.</p>
 <section class="footnotes" role="doc-endnotes">
 <hr>
 <ol>
